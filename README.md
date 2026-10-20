@@ -1,8 +1,9 @@
 # ROM patches for the Xiaomi Pad 8 Pro (piano)
 
-Optional changes to ROM source projects for the Xiaomi Pad 8 Pro: stylus
-laser pointer, keyboard cover layout, touchpad physics, Settings entries
-replaced by Xiaomi Parts, and the stock display and audio init scripts.
+Optional changes to ROM source projects for the Xiaomi Pad 8 Pro: the three-dot
+desktop window caption, rotation lock at the current angle, the stock display,
+audio and boot control init scripts, and build fixes. The Xiaomi feature changes
+live with Xiaomi Parts.
 The device tree builds without them.
 
 Goes in `device/xiaomi/piano-patches`. `vendorsetup.sh` applies
