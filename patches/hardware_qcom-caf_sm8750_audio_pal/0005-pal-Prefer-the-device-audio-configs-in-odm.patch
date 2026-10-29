@@ -1,0 +1,78 @@
+From 39229c4e5a3cb2ee261a193d1af4d008052294ef Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Thu, 29 Oct 2026 14:02:18 +0800
+Subject: [PATCH 5/6] pal: Prefer the device audio configs in /odm
+
+The stock piano PAL loads the resource manager, mixer paths and usecase
+KV files from /odm/etc first. The copies in /vendor/etc belong to the
+shared SM8750 blobs and describe a WSA speaker setup (cps_mode 2), so
+source PAL sent WSA CPS payloads that the FourSemi graph rejects.
+
+Use /odm/etc/audio/sku_<sku> and /odm/etc/usecaseKvManager.xml when
+they exist, and keep /vendor as the fallback.
+---
+ resource_manager/src/ResourceManager.cpp |  8 ++++++--
+ session/src/PayloadBuilder.cpp           | 12 ++++++++++--
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/resource_manager/src/ResourceManager.cpp b/resource_manager/src/ResourceManager.cpp
+index 47fcb76..9e4aa49 100644
+--- a/resource_manager/src/ResourceManager.cpp
++++ b/resource_manager/src/ResourceManager.cpp
+@@ -14480,9 +14480,13 @@ void ResourceManager::getVendorConfigPath (char* config_file_path, int path_size
+        snprintf(config_file_path, path_size, "%s", "/vendor/etc");
+ #endif
+     } else {
+-       /* Audio configs are stored in /vendor/etc/audio/sku_${vendor_sku} */
++       /* Device specific configs in /odm/etc/audio/sku_${vendor_sku}
++        * override the platform ones in /vendor/etc/audio/sku_${vendor_sku} */
+        snprintf(config_file_path, path_size,
+-                       "%s%s", "/vendor/etc/audio/sku_", vendor_sku);
++                       "%s%s", "/odm/etc/audio/sku_", vendor_sku);
++       if (access(config_file_path, R_OK) != 0)
++           snprintf(config_file_path, path_size,
++                           "%s%s", "/vendor/etc/audio/sku_", vendor_sku);
+     }
+ }
+ 
+diff --git a/session/src/PayloadBuilder.cpp b/session/src/PayloadBuilder.cpp
+index 2169a0a..a0766ea 100644
+--- a/session/src/PayloadBuilder.cpp
++++ b/session/src/PayloadBuilder.cpp
+@@ -32,6 +32,7 @@
+  */
+ 
+ #define LOG_TAG "PAL: PayloadBuilder"
++#include <unistd.h>
+ #include <agm/agm_api.h>
+ #include <bt_intf.h>
+ #include <bt_ble.h>
+@@ -57,6 +58,7 @@
+ #define USECASE_XML_FILE "/etc/usecaseKvManager.xml"
+ #else
+ #define USECASE_XML_FILE "/vendor/etc/usecaseKvManager.xml"
++#define USECASE_XML_FILE_ODM "/odm/etc/usecaseKvManager.xml"
+ #endif
+ 
+ #define PARAM_ID_CHMIXER_COEFF 0x0800101F
+@@ -1242,8 +1244,14 @@ int PayloadBuilder::init()
+     all_devices.clear();
+     all_devicepps.clear();
+ 
+-    PAL_INFO(LOG_TAG, "XML parsing started %s", USECASE_XML_FILE);
+-    file = fopen(USECASE_XML_FILE, "r");
++    const char *usecaseXml = USECASE_XML_FILE;
++#ifdef USECASE_XML_FILE_ODM
++    /* Device specific usecase KVs in /odm override the platform ones */
++    if (access(USECASE_XML_FILE_ODM, R_OK) == 0)
++        usecaseXml = USECASE_XML_FILE_ODM;
++#endif
++    PAL_INFO(LOG_TAG, "XML parsing started %s", usecaseXml);
++    file = fopen(usecaseXml, "r");
+     if (!file) {
+         PAL_ERR(LOG_TAG, "Failed to open xml");
+         ret = -EINVAL;
+-- 
+2.55.0
+

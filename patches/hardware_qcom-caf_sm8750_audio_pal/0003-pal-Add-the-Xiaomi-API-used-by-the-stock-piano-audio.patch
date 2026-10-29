@@ -1,0 +1,313 @@
+From 284dafde5a855893332ecc2a31cf92491a08b049 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Wed, 28 Oct 2026 14:04:22 +0800
+Subject: [PATCH] pal: Add the Xiaomi API used by the stock piano audio HAL
+
+The stock libaudiocorehal.qti imports pal_set_zoom_state,
+pal_mute_active_rx, pal_get_mixctrl_name and setPalLogLevel, and fails
+to load without them. Implement them the way the stock libar-pal does:
+
+- pal_set_zoom_state marks a stream as recording with camera zoom;
+  its record MFC then outputs three channels.
+- pal_mute_active_rx mutes or unmutes every playback stream, and
+  playback streams started while muted start muted.
+- pal_get_mixctrl_name returns the stream's PCM or COMPRESS mixer
+  control prefix ("PCM<id>", "COMPRESS<id>").
+- setPalLogLevel maps the HAL log level onto pal_log_lvl.
+---
+ Pal.cpp                                  | 84 ++++++++++++++++++++++++
+ inc/PalApi.h                             | 11 ++++
+ resource_manager/inc/ResourceManager.h   |  2 +
+ resource_manager/src/ResourceManager.cpp | 26 ++++++++
+ session/inc/Session.h                    |  1 +
+ session/inc/SessionAlsaCompress.h        |  1 +
+ session/inc/SessionAlsaPcm.h             |  1 +
+ session/src/SessionAlsaCompress.cpp      |  7 ++
+ session/src/SessionAlsaPcm.cpp           |  9 +++
+ stream/inc/Stream.h                      |  1 +
+ stream/src/StreamPCM.cpp                 |  4 ++
+ 11 files changed, 147 insertions(+)
+
+diff --git a/Pal.cpp b/Pal.cpp
+index c30f729..b281d81 100644
+--- a/Pal.cpp
++++ b/Pal.cpp
+@@ -45,6 +45,7 @@
+ #include <mutex>
+ #include <PalApi.h>
+ #include "Stream.h"
++#include "Session.h"
+ #include "Device.h"
+ #include "ResourceManager.h"
+ #include "PalCommon.h"
+@@ -1650,3 +1651,86 @@ int32_t pal_set_mic_mute(bool state){
+     PAL_ERR(LOG_TAG, "error: API: pal_set_mic_mute not implemented");
+     return -ENOSYS;
+ }
++
++int32_t pal_set_zoom_state(pal_stream_handle_t *stream_handle, bool state)
++{
++    Stream *s = NULL;
++    int status;
++    std::shared_ptr<ResourceManager> rm = NULL;
++
++    rm = ResourceManager::getInstance();
++    if (!rm) {
++        PAL_ERR(LOG_TAG, "Invalid resource manager");
++        return -EINVAL;
++    }
++
++    rm->lockActiveStream();
++    if (!rm->isActiveStream(stream_handle)) {
++        rm->unlockActiveStream();
++        return -EINVAL;
++    }
++
++    s = reinterpret_cast<Stream *>(stream_handle);
++    status = rm->increaseStreamUserCounter(s);
++    rm->unlockActiveStream();
++    if (0 != status) {
++        PAL_ERR(LOG_TAG, "failed to increase stream user count");
++        return status;
++    }
++
++    s->isOnCamZoom = state;
++    PAL_DBG(LOG_TAG, "is_on_cam_zoom = %d", state);
++
++    rm->lockActiveStream();
++    rm->decreaseStreamUserCounter(s);
++    rm->unlockActiveStream();
++    return 0;
++}
++
++int32_t pal_mute_active_rx(bool state)
++{
++    std::shared_ptr<ResourceManager> rm = NULL;
++
++    rm = ResourceManager::getInstance();
++    if (!rm) {
++        PAL_ERR(LOG_TAG, "Invalid resource manager");
++        return -EINVAL;
++    }
++    return rm->muteActiveRxStream(state);
++}
++
++void setPalLogLevel(int level)
++{
++    switch (level) {
++    case 1:
++        pal_log_lvl = PAL_LOG_ERR | PAL_LOG_INFO;
++        break;
++    case 2:
++        pal_log_lvl = PAL_LOG_ERR | PAL_LOG_INFO | PAL_LOG_DBG;
++        break;
++    case 4:
++    case 8:
++        pal_log_lvl = PAL_LOG_ERR | PAL_LOG_INFO | PAL_LOG_DBG | PAL_LOG_VERBOSE;
++        break;
++    default:
++        PAL_INFO(LOG_TAG, "invalid log level %d", level);
++        break;
++    }
++}
++
++/* The caller frees the name with delete[]. */
++char *pal_get_mixctrl_name(pal_stream_handle_t *stream_handle)
++{
++    Stream *s = reinterpret_cast<Stream *>(stream_handle);
++    Session *session = NULL;
++    std::string name;
++    char *ret;
++
++    if (!s)
++        return nullptr;
++    if (!s->getAssociatedSession(&session) && session)
++        name = session->getMixctrlName();
++    ret = new char[name.size() + 1];
++    strlcpy(ret, name.c_str(), name.size() + 1);
++    return ret;
++}
+diff --git a/inc/PalApi.h b/inc/PalApi.h
+index 737cc3c..f0b1dd3 100644
+--- a/inc/PalApi.h
++++ b/inc/PalApi.h
+@@ -592,6 +592,17 @@ int32_t pal_gef_rw_param_acdb(uint32_t param_id, void *param_payload,
+   */
+ int32_t pal_register_for_events(pal_audio_event_callback cb_event);
+ 
++/*
++ * Xiaomi extensions called by the stock piano audio HAL: camera zoom
++ * recording, muting playback around device switches, and the stream's
++ * mixer control prefix. pal_get_mixctrl_name's result is freed with delete[].
++ */
++int32_t pal_set_zoom_state(pal_stream_handle_t *stream_handle, bool state);
++int32_t pal_mute_active_rx(bool state);
++char *pal_get_mixctrl_name(pal_stream_handle_t *stream_handle);
++/* Log level from the HAL: 1 error+info, 2 +debug, 4 or 8 +verbose. */
++void setPalLogLevel(int level);
++
+ #ifdef __cplusplus
+ }  /* extern "C" */
+ #endif
+diff --git a/resource_manager/inc/ResourceManager.h b/resource_manager/inc/ResourceManager.h
+index 52630fb..ae25365 100644
+--- a/resource_manager/inc/ResourceManager.h
++++ b/resource_manager/inc/ResourceManager.h
+@@ -1136,6 +1136,8 @@ public:
+     static bool isSsrDownFeasible(std::shared_ptr<ResourceManager> rm, int type);
+     bool isStreamSupportedInsndCardStandy(uint32_t type);
+     void checkAndSetDutyCycleParam();
++    int muteActiveRxStream(bool state);
++    bool activeRxMuted = false;
+     int32_t getActiveVoiceCallDevices(std::vector <std::shared_ptr<Device>> &devices);
+     bool isValidDeviceSwitchForStream(Stream *s, pal_device_id_t newDeviceId);
+     int32_t reconfigureInCallMusicStream(struct sessionToPayloadParam deviceData);
+diff --git a/resource_manager/src/ResourceManager.cpp b/resource_manager/src/ResourceManager.cpp
+index e4db9b8..944a190 100644
+--- a/resource_manager/src/ResourceManager.cpp
++++ b/resource_manager/src/ResourceManager.cpp
+@@ -6964,6 +6964,32 @@ int ResourceManager::checkAndUpdateGroupDevConfig(struct pal_device *deviceattr,
+     return 0;
+ }
+ 
++int ResourceManager::muteActiveRxStream(bool state)
++{
++    int status = 0;
++    struct pal_stream_attributes sAttr;
++
++    activeRxMuted = state;
++    if (mActiveStreams.empty())
++        return -EINVAL;
++
++    mActiveStreamMutex.lock();
++    for (auto s : mActiveStreams) {
++        status = s->getStreamAttributes(&sAttr);
++        if (status != 0) {
++            PAL_ERR(LOG_TAG, "getStreamAttributes failed %d", status);
++            continue;
++        }
++        if (sAttr.direction != PAL_AUDIO_OUTPUT)
++            continue;
++        PAL_INFO(LOG_TAG, "%s stream type %d", state ? "mute" : "unmute", sAttr.type);
++        status = s->mute(state);
++    }
++    mActiveStreamMutex.unlock();
++
++    return status;
++}
++
+ void ResourceManager::checkAndSetDutyCycleParam()
+ {
+     pal_stream_attributes StrAttr;
+diff --git a/session/inc/Session.h b/session/inc/Session.h
+index 464875c..21b9c37 100644
+--- a/session/inc/Session.h
++++ b/session/inc/Session.h
+@@ -163,6 +163,7 @@ public:
+     virtual int getParameters(Stream *s __unused, int tagId __unused, uint32_t param_id __unused, void **payload __unused) {return 0;};
+     virtual int setParameters(Stream *s __unused, int tagId __unused, uint32_t param_id __unused, void *payload __unused) {return 0;};
+     virtual int registerCallBack(session_callback cb __unused, uint64_t cookie __unused) {return 0;};
++    virtual std::string getMixctrlName() {return "";};
+     virtual int drain(pal_drain_type_t type __unused) {return 0;};
+     virtual int flush() {return 0;};
+     virtual void setEventPayload(uint32_t event_id __unused, void *payload __unused, size_t payload_size __unused) {  };
+diff --git a/session/inc/SessionAlsaCompress.h b/session/inc/SessionAlsaCompress.h
+index ce37e39..0d711d1 100644
+--- a/session/inc/SessionAlsaCompress.h
++++ b/session/inc/SessionAlsaCompress.h
+@@ -151,6 +151,7 @@ public:
+     int setECRef(Stream *s, std::shared_ptr<Device> rx_dev, bool is_enable) override;
+     static void offloadThreadLoop(SessionAlsaCompress *ob);
+     int registerCallBack(session_callback cb, uint64_t cookie);
++    std::string getMixctrlName() override;
+     int drain(pal_drain_type_t type);
+     int flush();
+     int getTimestamp(struct pal_session_time *stime) override;
+diff --git a/session/inc/SessionAlsaPcm.h b/session/inc/SessionAlsaPcm.h
+index 40e278a..9620793 100644
+--- a/session/inc/SessionAlsaPcm.h
++++ b/session/inc/SessionAlsaPcm.h
+@@ -102,6 +102,7 @@ public:
+     int setECRef(Stream *s, std::shared_ptr<Device> rx_dev, bool is_enable) override;
+     int getTimestamp(struct pal_session_time *stime) override;
+     int registerCallBack(session_callback cb, uint64_t cookie) override;
++    std::string getMixctrlName() override;
+     int drain(pal_drain_type_t type) override;
+     int flush();
+     int setupSessionDevice(Stream* streamHandle, pal_stream_type_t streamType,
+diff --git a/session/src/SessionAlsaCompress.cpp b/session/src/SessionAlsaCompress.cpp
+index 5dab30c..2501158 100644
+--- a/session/src/SessionAlsaCompress.cpp
++++ b/session/src/SessionAlsaCompress.cpp
+@@ -2459,6 +2459,13 @@ exit:
+     return status;
+ }
+ 
++std::string SessionAlsaCompress::getMixctrlName()
++{
++    if (compressDevIds.empty())
++        return "";
++    return "COMPRESS" + std::to_string(compressDevIds.at(0));
++}
++
+ int SessionAlsaCompress::registerCallBack(session_callback cb, uint64_t cookie)
+ {
+     sessionCb = cb;
+diff --git a/session/src/SessionAlsaPcm.cpp b/session/src/SessionAlsaPcm.cpp
+index e58d434..82d4f5a 100644
+--- a/session/src/SessionAlsaPcm.cpp
++++ b/session/src/SessionAlsaPcm.cpp
+@@ -1303,6 +1303,8 @@ int SessionAlsaPcm::start(Stream * s)
+                     streamData.bitWidth = sAttr.in_media_config.bit_width;
+                 streamData.sampleRate = sAttr.in_media_config.sample_rate;
+                 streamData.numChannel = sAttr.in_media_config.ch_info.channels;
++                if (s->isOnCamZoom)
++                    streamData.numChannel = 3;
+                 streamData.ch_info = nullptr;
+                 builder->payloadMFCConfig(&payload, &payloadSize, miid, &streamData);
+                 if (payloadSize && payload) {
+@@ -3957,6 +3959,13 @@ exit:
+     return status;
+ }
+ 
++std::string SessionAlsaPcm::getMixctrlName()
++{
++    if (pcmDevIds.empty())
++        return "";
++    return "PCM" + std::to_string(pcmDevIds.at(0));
++}
++
+ int SessionAlsaPcm::registerCallBack(session_callback cb, uint64_t cookie)
+ {
+     sessionCb = cb;
+diff --git a/stream/inc/Stream.h b/stream/inc/Stream.h
+index 3a7c746..14ce5ca 100644
+--- a/stream/inc/Stream.h
++++ b/stream/inc/Stream.h
+@@ -201,6 +201,7 @@ public:
+     bool a2dpPaused = false;
+     bool force_nlpi_vote = false;
+     bool isMMap = false;
++    bool isOnCamZoom = false;
+     bool isComboHeadsetActive = false;
+     std::vector<pal_device_id_t> suspendedOutDevIds;
+     std::vector<pal_device_id_t> suspendedInDevIds;
+diff --git a/stream/src/StreamPCM.cpp b/stream/src/StreamPCM.cpp
+index b4cf71c..80fbad3 100644
+--- a/stream/src/StreamPCM.cpp
++++ b/stream/src/StreamPCM.cpp
+@@ -685,6 +685,10 @@ int32_t StreamPCM::start()
+         }
+         rm->unlockActiveStream();
+         rm->checkAndSetDutyCycleParam();
++        if (rm->activeRxMuted && mStreamAttr->direction == PAL_AUDIO_OUTPUT) {
++            PAL_DBG(LOG_TAG, "active rx is muted, mute the new stream");
++            mute_l(true);
++        }
+     } else if (currentState == STREAM_STARTED) {
+         PAL_INFO(LOG_TAG, "Stream already started, state %d", currentState);
+         goto exit;
+-- 
+2.55.0
+

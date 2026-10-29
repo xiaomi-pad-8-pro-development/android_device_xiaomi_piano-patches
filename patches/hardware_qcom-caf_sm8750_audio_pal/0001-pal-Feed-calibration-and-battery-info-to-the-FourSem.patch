@@ -1,0 +1,513 @@
+From f505a3a6403f2061c16e20bb756dfe9a3c9c4488 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Tue, 27 Oct 2026 14:02:54 +0800
+Subject: [PATCH] pal: Feed calibration and battery info to the FourSemi
+ speaker protection
+
+Stock piano PAL sends the factory speaker resistance (RE25) from
+fsalgo_rdc.bin and, while the speaker plays, the battery voltage and
+temperature (BSG) to the FourSemi module in the DSP. Without them the
+module protects the speakers with default values.
+
+Do the same from a small worker started and stopped with the speaker
+device on piano.
+---
+ Android.bp                     |   1 +
+ device/inc/FourSemiMonitor.h   |  74 +++++++
+ device/src/Device.cpp          |   7 +
+ device/src/FourSemiMonitor.cpp | 357 +++++++++++++++++++++++++++++++++
+ 4 files changed, 439 insertions(+)
+ create mode 100644 device/inc/FourSemiMonitor.h
+ create mode 100644 device/src/FourSemiMonitor.cpp
+
+diff --git a/Android.bp b/Android.bp
+index 4ea46aa..2530c8b 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -56,6 +56,7 @@ cc_library_shared {
+         "device/src/ECRefDevice.cpp",
+         "device/src/ExtEC.cpp",
+         "device/src/FMDevice.cpp",
++        "device/src/FourSemiMonitor.cpp",
+         "device/src/Handset.cpp",
+         "device/src/HandsetMic.cpp",
+         "device/src/HandsetVaMic.cpp",
+diff --git a/device/inc/FourSemiMonitor.h b/device/inc/FourSemiMonitor.h
+new file mode 100644
+index 0000000..4fbe9da
+--- /dev/null
++++ b/device/inc/FourSemiMonitor.h
+@@ -0,0 +1,74 @@
++/*
++ * Copyright (C) 2026 The LineageOS Project
++ * SPDX-License-Identifier: BSD-3-Clause-Clear
++ */
++
++#ifndef FOURSEMI_MONITOR_H
++#define FOURSEMI_MONITOR_H
++
++#include <condition_variable>
++#include <cstdint>
++#include <mutex>
++#include <thread>
++
++/*
++ * Feeds the FourSemi speaker protection module in the DSP: the factory
++ * speaker calibration (RE25) once, then the battery voltage and temperature,
++ * which it uses to limit speaker power on a low or hot battery ("BSG"). The
++ * DSP module tells us what to report and how often.
++ */
++class FourSemiMonitor {
++public:
++    static FourSemiMonitor& getInstance();
++    static bool isFourSemiAmp();
++
++    void start();
++    void stop();
++
++private:
++    FourSemiMonitor() = default;
++    ~FourSemiMonitor();
++
++    /* Reporting config read from the DSP module, eight LE32 words. */
++    struct BsgConfig {
++        uint32_t vmode;      /* 1: voltage in uV, 2: capacity in % */
++        uint32_t ven;
++        uint32_t vinterval;  /* ms */
++        uint32_t vstep;
++        uint32_t tmode;
++        uint32_t ten;
++        uint32_t tinterval;  /* ms */
++        uint32_t tstep;      /* degrees C */
++    };
++
++    /* Battery info sent to the DSP module, four LE32 words. */
++    struct BsgInfo {
++        uint32_t vmode;
++        int32_t voltage;
++        uint32_t tmode;
++        int32_t temp;        /* tenths of a degree C */
++    };
++
++    void threadLoop();
++    bool sendCalibration();
++    bool queryConfig();
++    void report(bool force);
++    int intervalMs() const;
++
++    static int transfer(uint32_t paramId, void *data, uint32_t size, bool get);
++    static bool readSysfsInt(const char *path, int32_t *value);
++
++    std::mutex mLock;
++    std::condition_variable mCond;
++    std::thread mThread;
++    bool mRunning = false;
++    bool mExit = false;
++    bool mDisabled = false;
++    bool mCalibrated = false;
++    int mQueryFailures = 0;
++    BsgConfig mConfig = {};
++    int32_t mLastVoltage = 0;
++    int32_t mLastTemp = 0;
++};
++
++#endif /* FOURSEMI_MONITOR_H */
+diff --git a/device/src/Device.cpp b/device/src/Device.cpp
+index cbb851e..62a7fa0 100644
+--- a/device/src/Device.cpp
++++ b/device/src/Device.cpp
+@@ -84,6 +84,7 @@
+ #include "DisplayPort.h"
+ #include "RTProxy.h"
+ #include "FMDevice.h"
++#include "FourSemiMonitor.h"
+ #include "HapticsDev.h"
+ #include "UltrasoundDevice.h"
+ #include "ExtEC.h"
+@@ -635,6 +636,9 @@ int Device::start_l()
+                  PAL_ERR(LOG_TAG, "Error: Dev setParam failed for %d\n",
+                                    this->deviceAttr.id);
+         }
++
++        if (this->deviceAttr.id == PAL_DEVICE_OUT_SPEAKER && FourSemiMonitor::isFourSemiAmp())
++            FourSemiMonitor::getInstance().start();
+     }
+     deviceStartStopCount++;
+ exit :
+@@ -662,6 +666,9 @@ int Device::stop_l()
+ 
+     if (deviceStartStopCount > 0) {
+         --deviceStartStopCount;
++        if (deviceStartStopCount == 0 && this->deviceAttr.id == PAL_DEVICE_OUT_SPEAKER &&
++                FourSemiMonitor::isFourSemiAmp())
++            FourSemiMonitor::getInstance().stop();
+     }
+     PAL_DBG(LOG_TAG, "Exit, startStopCount %d", deviceStartStopCount);
+ 
+diff --git a/device/src/FourSemiMonitor.cpp b/device/src/FourSemiMonitor.cpp
+new file mode 100644
+index 0000000..79db9f5
+--- /dev/null
++++ b/device/src/FourSemiMonitor.cpp
+@@ -0,0 +1,357 @@
++/*
++ * Copyright (C) 2026 The LineageOS Project
++ * SPDX-License-Identifier: BSD-3-Clause-Clear
++ */
++
++#define LOG_TAG "PAL: FourSemiMonitor"
++
++#include "FourSemiMonitor.h"
++
++#include <cutils/properties.h>
++#include <pthread.h>
++#include <tinyalsa/asoundlib.h>
++
++#include <cerrno>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <vector>
++
++#include "Device.h"
++#include "apm_api.h"
++#include "PalCommon.h"
++#include "PayloadBuilder.h"
++#include "ResourceManager.h"
++#include "Session.h"
++#include "Stream.h"
++
++namespace {
++
++/* Module tag of the FourSemi speaker protection module in the RX graph. */
++constexpr uint32_t FOURSEMI_MODULE_TAG = 0xC0000029;
++
++constexpr uint32_t PARAM_ID_FSM_RE25 = 0x10001fa7;
++constexpr uint32_t PARAM_ID_FSM_BSG_CONFIG = 0x10001fb6;
++constexpr uint32_t PARAM_ID_FSM_BSG_INFO = 0x10001fb5;
++
++constexpr uint32_t BSG_VMODE_VOLTAGE = 1;
++constexpr uint32_t BSG_VMODE_CAPACITY = 2;
++constexpr uint32_t BSG_TMODE_TEMP = 3;
++
++constexpr int MIN_INTERVAL_MS = 1000;
++constexpr int MAX_INTERVAL_MS = 10000;
++constexpr int DEFAULT_INTERVAL_MS = 2000;
++constexpr int MAX_QUERY_FAILURES = 5;
++
++/* Factory speaker resistance in ohms, Q12, one LE32 per speaker. */
++constexpr const char *CALIBRATION_FILE = "/mnt/vendor/persist/audio/fsalgo_rdc.bin";
++constexpr int NUM_SPEAKERS = 4;
++constexpr uint32_t RE25_MIN = 26214;     /* 6.4 ohms */
++constexpr uint32_t RE25_MAX = 36454;     /* 8.9 ohms */
++constexpr uint32_t RE25_DEFAULT = 27852; /* 6.8 ohms */
++
++struct Re25Param {
++    uint16_t version;
++    uint16_t count;
++    struct {
++        uint32_t reserved;
++        uint32_t re25;
++    } speaker[NUM_SPEAKERS];
++} __attribute__((packed));
++
++constexpr const char *BATTERY_VOLTAGE = "/sys/class/power_supply/battery/voltage_now";
++constexpr const char *BATTERY_CAPACITY = "/sys/class/power_supply/battery/capacity";
++constexpr const char *BATTERY_TEMP = "/sys/class/power_supply/battery/temp";
++
++}  // namespace
++
++FourSemiMonitor& FourSemiMonitor::getInstance()
++{
++    static FourSemiMonitor instance;
++    return instance;
++}
++
++bool FourSemiMonitor::isFourSemiAmp()
++{
++    char device[PROPERTY_VALUE_MAX];
++
++    property_get("ro.product.device", device, "");
++    return !strcmp(device, "piano");
++}
++
++FourSemiMonitor::~FourSemiMonitor()
++{
++    {
++        std::lock_guard<std::mutex> lock(mLock);
++        mExit = true;
++    }
++    mCond.notify_all();
++    if (mThread.joinable())
++        mThread.join();
++}
++
++void FourSemiMonitor::start()
++{
++    std::lock_guard<std::mutex> lock(mLock);
++
++    if (mRunning)
++        return;
++    mRunning = true;
++    mDisabled = false;
++    /* The graph is new, so the module lost its calibration. */
++    mCalibrated = false;
++    mQueryFailures = 0;
++    mConfig = {};
++    if (!mThread.joinable())
++        mThread = std::thread(&FourSemiMonitor::threadLoop, this);
++    mCond.notify_all();
++}
++
++void FourSemiMonitor::stop()
++{
++    std::lock_guard<std::mutex> lock(mLock);
++
++    mRunning = false;
++    mCond.notify_all();
++}
++
++int FourSemiMonitor::intervalMs() const
++{
++    int interval = 0;
++
++    if (mConfig.ven)
++        interval = mConfig.vinterval;
++    else if (mConfig.ten)
++        interval = mConfig.tinterval;
++
++    if (interval < MIN_INTERVAL_MS || interval > MAX_INTERVAL_MS)
++        return DEFAULT_INTERVAL_MS;
++    return interval;
++}
++
++void FourSemiMonitor::threadLoop()
++{
++    pthread_setname_np(pthread_self(), "FSMonitor");
++
++    std::unique_lock<std::mutex> lock(mLock);
++    while (!mExit) {
++        if (!mRunning || mDisabled) {
++            mCond.wait(lock);
++            continue;
++        }
++
++        if (!mCalibrated) {
++            lock.unlock();
++            bool ok = sendCalibration();
++            lock.lock();
++            mCalibrated = ok;
++        }
++
++        bool force = false;
++        if (!mConfig.ven && !mConfig.ten) {
++            lock.unlock();
++            bool ok = queryConfig();
++            lock.lock();
++            if (!ok) {
++                if (++mQueryFailures >= MAX_QUERY_FAILURES) {
++                    PAL_INFO(LOG_TAG, "BSG disabled (queried %d times), stopping",
++                             mQueryFailures);
++                    mDisabled = true;
++                    continue;
++                }
++            } else {
++                force = true;
++            }
++        }
++
++        if (mConfig.ven || mConfig.ten) {
++            lock.unlock();
++            report(force);
++            lock.lock();
++        }
++
++        mCond.wait_for(lock, std::chrono::milliseconds(intervalMs()));
++    }
++}
++
++/*
++ * Send the factory speaker resistance to the module of a new speaker graph.
++ * Missing or out of range values fall back to the default.
++ */
++bool FourSemiMonitor::sendCalibration()
++{
++    uint32_t values[NUM_SPEAKERS] = {};
++    Re25Param param = {};
++    FILE *file;
++
++    file = fopen(CALIBRATION_FILE, "rb");
++    if (file) {
++        if (fread(values, sizeof(values), 1, file) != 1)
++            memset(values, 0, sizeof(values));
++        fclose(file);
++    } else {
++        PAL_ERR(LOG_TAG, "Failed to open %s: %s", CALIBRATION_FILE, strerror(errno));
++    }
++
++    param.count = NUM_SPEAKERS;
++    for (int i = 0; i < NUM_SPEAKERS; i++) {
++        uint32_t re25 = values[i];
++
++        if (re25 <= RE25_MIN || re25 >= RE25_MAX) {
++            PAL_ERR(LOG_TAG, "Speaker %d RE25 %u out of range, using default", i, re25);
++            re25 = RE25_DEFAULT;
++        }
++        param.speaker[i].re25 = re25;
++        PAL_INFO(LOG_TAG, "Speaker %d RE25 %f ohms", i, re25 / 4096.0);
++    }
++
++    return !transfer(PARAM_ID_FSM_RE25, &param, sizeof(param), false);
++}
++
++bool FourSemiMonitor::queryConfig()
++{
++    BsgConfig config = {};
++
++    if (transfer(PARAM_ID_FSM_BSG_CONFIG, &config, sizeof(config), true))
++        return false;
++
++    PAL_INFO(LOG_TAG, "BSG V: mode %u en %u interval %u step %u; T: mode %u en %u interval %u step %u",
++             config.vmode, config.ven, config.vinterval, config.vstep,
++             config.tmode, config.ten, config.tinterval, config.tstep);
++
++    std::lock_guard<std::mutex> lock(mLock);
++    mConfig = config;
++    return config.ven || config.ten;
++}
++
++void FourSemiMonitor::report(bool force)
++{
++    BsgConfig config;
++    BsgInfo info = {};
++    bool changed = force;
++
++    {
++        std::lock_guard<std::mutex> lock(mLock);
++        config = mConfig;
++    }
++
++    if (config.ven) {
++        const char *path = nullptr;
++
++        if (config.vmode == BSG_VMODE_VOLTAGE)
++            path = BATTERY_VOLTAGE;
++        else if (config.vmode == BSG_VMODE_CAPACITY)
++            path = BATTERY_CAPACITY;
++        else
++            PAL_ERR(LOG_TAG, "Invalid BSG V mode %u", config.vmode);
++
++        if (path && readSysfsInt(path, &info.voltage)) {
++            info.vmode = config.vmode;
++            if (std::abs(info.voltage - mLastVoltage) >= (int64_t)config.vstep)
++                changed = true;
++        }
++    }
++
++    if (config.ten) {
++        if (readSysfsInt(BATTERY_TEMP, &info.temp)) {
++            info.tmode = BSG_TMODE_TEMP;
++            /* The DSP step is in degrees, the battery reports tenths. */
++            if (std::abs(info.temp - mLastTemp) >= (int64_t)config.tstep * 10)
++                changed = true;
++        }
++    }
++
++    if (!changed)
++        return;
++
++    if (transfer(PARAM_ID_FSM_BSG_INFO, &info, sizeof(info), false))
++        return;
++
++    mLastVoltage = info.voltage;
++    mLastTemp = info.temp;
++    PAL_DBG(LOG_TAG, "Sent battery info: V %d (mode %u), T %d", info.voltage, info.vmode,
++            info.temp);
++}
++
++bool FourSemiMonitor::readSysfsInt(const char *path, int32_t *value)
++{
++    FILE *file = fopen(path, "r");
++    bool ok;
++
++    if (!file) {
++        PAL_ERR(LOG_TAG, "Failed to open %s: %s", path, strerror(errno));
++        return false;
++    }
++    ok = fscanf(file, "%d", value) == 1;
++    fclose(file);
++    return ok;
++}
++
++/*
++ * Send or read one parameter of the FourSemi module through the getParam or
++ * setParam control of an active speaker stream.
++ */
++int FourSemiMonitor::transfer(uint32_t paramId, void *data, uint32_t size, bool get)
++{
++    std::shared_ptr<ResourceManager> rm = ResourceManager::getInstance();
++    std::vector<Stream *> streams;
++    std::string backEnd;
++    struct pal_device dattr = {};
++    uint32_t payloadSize;
++    int status = -ENODEV;
++
++    if (!rm || !data || !size)
++        return -EINVAL;
++
++    dattr.id = PAL_DEVICE_OUT_SPEAKER;
++    std::shared_ptr<Device> speaker = Device::getInstance(&dattr, rm);
++    rm->getBackendName(PAL_DEVICE_OUT_SPEAKER, backEnd);
++    if (!speaker || backEnd.empty())
++        return -ENODEV;
++
++    rm->getActiveStream(streams, speaker);
++    if (streams.empty()) {
++        PAL_DBG(LOG_TAG, "No active speaker stream");
++        return -ENODEV;
++    }
++
++    /* SPF parameter header followed by the body, padded to 8 bytes. */
++    payloadSize = PAL_ALIGN_8BYTE(sizeof(struct apm_module_param_data_t) + size);
++    std::vector<uint8_t> payload(payloadSize, 0);
++    auto *header = reinterpret_cast<struct apm_module_param_data_t *>(payload.data());
++    header->param_id = paramId;
++    header->param_size = payloadSize - sizeof(struct apm_module_param_data_t);
++    memcpy(payload.data() + sizeof(*header), data, size);
++
++    for (Stream *stream : streams) {
++        Session *session = nullptr;
++        struct mixer_ctl *ctl;
++        uint32_t miid = 0;
++        int pcm = 0;
++
++        if (stream->getAssociatedSession(&session) || !session)
++            continue;
++        if (session->getMIID(backEnd.c_str(), FOURSEMI_MODULE_TAG, &miid) || !miid)
++            continue;
++        ctl = session->getFEMixerCtl(get ? "getParam" : "setParam", &pcm, PAL_AUDIO_OUTPUT);
++        if (!ctl)
++            continue;
++
++        header->module_instance_id = miid;
++        status = mixer_ctl_set_array(ctl, payload.data(), payloadSize);
++        if (!status && get)
++            status = mixer_ctl_get_array(ctl, payload.data(), payloadSize);
++        if (status) {
++            PAL_ERR(LOG_TAG, "%s param 0x%x on pcm %d failed: %d", get ? "Get" : "Set",
++                    paramId, pcm, status);
++            continue;
++        }
++
++        if (get)
++            memcpy(data, payload.data() + sizeof(*header), size);
++        return 0;
++    }
++
++    return status;
++}
+-- 
+2.55.0
+

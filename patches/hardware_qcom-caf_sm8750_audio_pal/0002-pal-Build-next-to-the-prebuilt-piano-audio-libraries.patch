@@ -1,0 +1,42 @@
+From 47ec0839ba28920c2b6b4ce0a8bfdedd80bde275 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Tue, 27 Oct 2026 16:28:37 +0800
+Subject: [PATCH] pal: Build next to the prebuilt piano audio libraries
+
+The prebuilt libar-gsl exports no headers, so point PAL at the GSL API
+headers in the source tree. Many log calls also pass size_t values to
+%d and similar, which this clang rejects with -Werror.
+---
+ Android.bp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/Android.bp b/Android.bp
+index 2530c8b..578eda3 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -22,6 +22,9 @@ cc_library_shared {
+     cflags: [
+         "-D_ANDROID_",
+         "-D_GNU_SOURCE",
++        // Many log calls pass size_t to %d.
++        "-Wno-error=format",
++        "-Wno-error=format-extra-args",
+         "-DA2DP_SINK_SUPPORTED",
+         "-DACD_SM_FILEPATH=\"/vendor/etc/models/acd/\"",
+         "-DADSP_SLEEP_MONITOR",
+@@ -121,6 +124,11 @@ cc_library_shared {
+     include_dirs: [
+         "system/media/audio/include",
+         "system/media/audio_route/include",
++        // The prebuilt libar-gsl exports no headers.
++        "hardware/qcom-caf/sm8750/audio/graphservices/gsl/api",
++        "hardware/qcom-caf/sm8750/audio/graphservices/gsl/dls_client_api",
++        "hardware/qcom-caf/sm8750/audio/graphservices/gsl/hw_rsc_api",
++        "hardware/qcom-caf/sm8750/audio/graphservices/gsl/rtc_api",
+     ],
+ 
+     header_libs: [
+-- 
+2.55.0
+

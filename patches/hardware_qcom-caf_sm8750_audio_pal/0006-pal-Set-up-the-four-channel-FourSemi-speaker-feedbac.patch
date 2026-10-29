@@ -1,0 +1,76 @@
+From d9582cddf950e12a21b198aa4e7c0c2ba462349a Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Thu, 29 Oct 2026 14:02:18 +0800
+Subject: [PATCH] pal: Set up the four channel FourSemi speaker feedback
+
+Piano has four FourSemi amps, so the speaker feedback device has four
+channels. viTxSetupThreadLoop only handled one or two channels and gave
+up with "Unsupported channel", which left the FourSemi module without
+its feedback path and made every speaker graph start fail with -22.
+
+Stock PAL opens the four channel feedback path without an SP_VI_Map
+key for non-WSA amps, so do the same.
+---
+ device/src/SpeakerProtection.cpp | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/device/src/SpeakerProtection.cpp b/device/src/SpeakerProtection.cpp
+index 1561058..18850df 100644
+--- a/device/src/SpeakerProtection.cpp
++++ b/device/src/SpeakerProtection.cpp
+@@ -542,6 +542,9 @@ int SpeakerProtection::spkrStartCalibration()
+         case 2 :
+             ch_info.channels = CHANNELS_2;
+         break;
++        case 4 :
++            ch_info.channels = CHANNELS_4;
++        break;
+         default:
+             PAL_DBG(LOG_TAG, "Unsupported channel. Set default as 2");
+             ch_info.channels = CHANNELS_2;
+@@ -585,6 +588,9 @@ int SpeakerProtection::spkrStartCalibration()
+         case 2 :
+             calVector.push_back(std::make_pair(SPK_PRO_VI_MAP, STEREO_SPKR));
+         break;
++        case 4 :
++            /* FourSemi quad amps: the feedback graph takes no VI map. */
++        break;
+         default :
+             PAL_ERR(LOG_TAG, "Unsupported channel");
+             goto exit;
+@@ -673,6 +679,9 @@ int SpeakerProtection::spkrStartCalibration()
+         case 2 :
+             config.channels = CHANNELS_2;
+         break;
++        case 4 :
++            config.channels = CHANNELS_4;
++        break;
+         default:
+             PAL_DBG(LOG_TAG, "Unsupported channel. Set default as 2");
+             config.channels = CHANNELS_2;
+@@ -1519,6 +1528,11 @@ int SpeakerProtection::viTxSetupThreadLoop()
+         ch_info.ch_map[1] = PAL_CHMAP_CHANNEL_FR;
+         config.channels = CHANNELS_2;
+     break;
++    case 4:
++        /* The channel map comes from getChannelMap above. */
++        ch_info.channels = CHANNELS_4;
++        config.channels = CHANNELS_4;
++    break;
+     default:
+         PAL_DBG(LOG_TAG, "Unsupported channel. Set defauly as 2");
+         ch_info.channels = CHANNELS_2;
+@@ -1591,6 +1605,9 @@ int SpeakerProtection::viTxSetupThreadLoop()
+         case 2 :
+             calVector.push_back(std::make_pair(SPK_PRO_VI_MAP, STEREO_SPKR));
+         break;
++        case 4 :
++            /* FourSemi quad amps: the feedback graph takes no VI map. */
++        break;
+         default :
+             PAL_ERR(LOG_TAG, "Unsupported channel");
+             goto exit;
+-- 
+2.55.0
+

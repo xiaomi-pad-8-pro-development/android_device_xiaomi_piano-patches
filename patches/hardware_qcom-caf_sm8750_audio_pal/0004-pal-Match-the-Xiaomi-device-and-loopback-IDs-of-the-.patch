@@ -1,0 +1,172 @@
+From a05b9d5372a9a872bf88fb9f5cd0172fe9365d24 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Wed, 28 Oct 2026 21:41:31 +0800
+Subject: [PATCH] pal: Match the Xiaomi device and loopback IDs of the stock
+ piano HAL
+
+The stock audio HAL and the piano usecaseKvManager.xml use Xiaomi's
+satellite call endpoints. Stock libar-pal numbers them as:
+
+  PAL_DEVICE_OUT_TIANTONG = 26 (OUT_BLUETOOTH_HFP moves to 27)
+  PAL_DEVICE_IN_TIANTONG  = PAL_DEVICE_IN_MIN + 28 (IN_BLUETOOTH_HFP + 29)
+  PAL_STREAM_LOOPBACK_TIANTONG_TX/RX = 8/9
+
+Without them every input device number is off by one against the stock
+HAL and the XML parser aborts on the unknown device name.
+---
+ inc/PalDefs.h                            | 18 ++++++++++++++----
+ resource_manager/src/ResourceManager.cpp |  8 ++++++++
+ 2 files changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/inc/PalDefs.h b/inc/PalDefs.h
+index d0def8e..c98a251 100644
+--- a/inc/PalDefs.h
++++ b/inc/PalDefs.h
+@@ -454,9 +454,10 @@ typedef enum {
+     PAL_DEVICE_OUT_BLUETOOTH_BLE_BROADCAST = 23,
+     PAL_DEVICE_OUT_DUMMY = 24,
+     PAL_DEVICE_OUT_RECORD_PROXY = 25,
+-    PAL_DEVICE_OUT_BLUETOOTH_HFP = 26,
++    PAL_DEVICE_OUT_TIANTONG = 26,
++    PAL_DEVICE_OUT_BLUETOOTH_HFP = 27,
+     // Add new OUT devices here, increment MAX and MIN below when you do so
+-    PAL_DEVICE_OUT_MAX = 27,
++    PAL_DEVICE_OUT_MAX = 28,
+     //INPUT DEVICES
+     PAL_DEVICE_IN_MIN = PAL_DEVICE_OUT_MAX,
+     PAL_DEVICE_IN_HANDSET_MIC = PAL_DEVICE_IN_MIN +1,
+@@ -486,9 +487,10 @@ typedef enum {
+     PAL_DEVICE_IN_DUMMY = PAL_DEVICE_IN_MIN + 25,
+     PAL_DEVICE_IN_CPS2_FEEDBACK = PAL_DEVICE_IN_MIN + 26,
+     PAL_DEVICE_IN_RECORD_PROXY = PAL_DEVICE_IN_MIN + 27,
+-    PAL_DEVICE_IN_BLUETOOTH_HFP = PAL_DEVICE_IN_MIN + 28,
++    PAL_DEVICE_IN_TIANTONG = PAL_DEVICE_IN_MIN + 28,
++    PAL_DEVICE_IN_BLUETOOTH_HFP = PAL_DEVICE_IN_MIN + 29,
+     // Add new IN devices here, increment MAX and MIN below when you do so
+-    PAL_DEVICE_IN_MAX = PAL_DEVICE_IN_MIN + 29,
++    PAL_DEVICE_IN_MAX = PAL_DEVICE_IN_MIN + 30,
+ } pal_device_id_t;
+ 
+ typedef enum {
+@@ -507,6 +509,8 @@ typedef enum {
+     PAL_STREAM_LOOPBACK_KARAOKE,
+     PAL_STREAM_LOOPBACK_PLAYBACK_ONLY,
+     PAL_STREAM_LOOPBACK_CAPTURE_ONLY,
++    PAL_STREAM_LOOPBACK_TIANTONG_TX,
++    PAL_STREAM_LOOPBACK_TIANTONG_RX,
+ } pal_stream_loopback_type_t;
+ 
+ typedef enum {
+@@ -553,6 +557,7 @@ static const std::map<std::string, pal_device_id_t> deviceIdLUT {
+     {std::string{ "PAL_DEVICE_OUT_ULTRASOUND" },           PAL_DEVICE_OUT_ULTRASOUND},
+     {std::string{ "PAL_DEVICE_OUT_ULTRASOUND_DEDICATED" }, PAL_DEVICE_OUT_ULTRASOUND_DEDICATED},
+     {std::string{ "PAL_DEVICE_OUT_DUMMY" },                PAL_DEVICE_OUT_DUMMY},
++    {std::string{ "PAL_DEVICE_OUT_TIANTONG" },             PAL_DEVICE_OUT_TIANTONG},
+     {std::string{ "PAL_DEVICE_OUT_BLUETOOTH_HFP" },        PAL_DEVICE_OUT_BLUETOOTH_HFP},
+     {std::string{ "PAL_DEVICE_OUT_MAX" },                  PAL_DEVICE_OUT_MAX},
+     {std::string{ "PAL_DEVICE_IN_HANDSET_MIC" },           PAL_DEVICE_IN_HANDSET_MIC},
+@@ -581,6 +586,7 @@ static const std::map<std::string, pal_device_id_t> deviceIdLUT {
+     {std::string{ "PAL_DEVICE_IN_HAPTICS_VI_FEEDBACK" },   PAL_DEVICE_IN_HAPTICS_VI_FEEDBACK},
+     {std::string{ "PAL_DEVICE_IN_CPS_FEEDBACK" },          PAL_DEVICE_IN_CPS_FEEDBACK},
+     {std::string{ "PAL_DEVICE_IN_DUMMY" },                 PAL_DEVICE_IN_DUMMY},
++    {std::string{ "PAL_DEVICE_IN_TIANTONG" },              PAL_DEVICE_IN_TIANTONG},
+     {std::string{ "PAL_DEVICE_IN_BLUETOOTH_HFP" },         PAL_DEVICE_IN_BLUETOOTH_HFP},
+ };
+ 
+@@ -612,6 +618,7 @@ static const std::map<uint32_t, std::string> deviceNameLUT {
+     {PAL_DEVICE_OUT_ULTRASOUND,           std::string{"PAL_DEVICE_OUT_ULTRASOUND"}},
+     {PAL_DEVICE_OUT_ULTRASOUND_DEDICATED, std::string{"PAL_DEVICE_OUT_ULTRASOUND_DEDICATED"}},
+     {PAL_DEVICE_OUT_DUMMY,                std::string{"PAL_DEVICE_OUT_DUMMY"}},
++    {PAL_DEVICE_OUT_TIANTONG,             std::string{"PAL_DEVICE_OUT_TIANTONG"}},
+     {PAL_DEVICE_OUT_BLUETOOTH_HFP,        std::string{"PAL_DEVICE_OUT_BLUETOOTH_HFP"}},
+     {PAL_DEVICE_OUT_MAX,                  std::string{"PAL_DEVICE_OUT_MAX"}},
+     {PAL_DEVICE_IN_HANDSET_MIC,           std::string{"PAL_DEVICE_IN_HANDSET_MIC"}},
+@@ -640,6 +647,7 @@ static const std::map<uint32_t, std::string> deviceNameLUT {
+     {PAL_DEVICE_IN_HAPTICS_VI_FEEDBACK,   std::string{"PAL_DEVICE_IN_HAPTICS_VI_FEEDBACK"}},
+     {PAL_DEVICE_IN_CPS_FEEDBACK,          std::string{"PAL_DEVICE_IN_CPS_FEEDBACK"}},
+     {PAL_DEVICE_IN_DUMMY,                 std::string{"PAL_DEVICE_IN_DUMMY"}},
++    {PAL_DEVICE_IN_TIANTONG,              std::string{"PAL_DEVICE_IN_TIANTONG"}},
+     {PAL_DEVICE_IN_BLUETOOTH_HFP,         std::string{"PAL_DEVICE_IN_BLUETOOTH_HFP"}},
+ };
+ 
+@@ -726,6 +734,8 @@ const std::map<uint32_t, std::string> loopbackLUT {
+     {PAL_STREAM_LOOPBACK_KARAOKE,       std::string{ "PAL_STREAM_LOOPBACK_KARAOKE" }},
+     {PAL_STREAM_LOOPBACK_PLAYBACK_ONLY, std::string{ "PAL_STREAM_LOOPBACK_PLAYBACK_ONLY" } },
+     {PAL_STREAM_LOOPBACK_CAPTURE_ONLY,  std::string{ "PAL_STREAM_LOOPBACK_CAPTURE_ONLY" } },
++    {PAL_STREAM_LOOPBACK_TIANTONG_TX,   std::string{ "PAL_STREAM_LOOPBACK_TIANTONG_TX" } },
++    {PAL_STREAM_LOOPBACK_TIANTONG_RX,   std::string{ "PAL_STREAM_LOOPBACK_TIANTONG_RX" } },
+ };
+ 
+ const std::map<uint32_t, std::string> hapticsLUT {
+diff --git a/resource_manager/src/ResourceManager.cpp b/resource_manager/src/ResourceManager.cpp
+index 944a190..47fcb76 100644
+--- a/resource_manager/src/ResourceManager.cpp
++++ b/resource_manager/src/ResourceManager.cpp
+@@ -235,6 +235,7 @@ std::vector<std::pair<int32_t, std::string>> ResourceManager::deviceLinkName {
+     {PAL_DEVICE_OUT_ULTRASOUND,           {std::string{ "" }}},
+     {PAL_DEVICE_OUT_ULTRASOUND_DEDICATED, {std::string{ "" }}},
+     {PAL_DEVICE_OUT_DUMMY,                {std::string{ "" }}},
++    {PAL_DEVICE_OUT_TIANTONG,             {std::string{ "" }}},
+     {PAL_DEVICE_OUT_BLUETOOTH_HFP,        {std::string{ "" }}},
+     {PAL_DEVICE_OUT_MAX,                  {std::string{ "none" }}},
+ 
+@@ -265,6 +266,7 @@ std::vector<std::pair<int32_t, std::string>> ResourceManager::deviceLinkName {
+     {PAL_DEVICE_IN_DUMMY,                 {std::string{ "" }}},
+     {PAL_DEVICE_IN_CPS2_FEEDBACK,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_RECORD_PROXY,          {std::string{ "" }}},
++    {PAL_DEVICE_IN_TIANTONG,              {std::string{ "" }}},
+     {PAL_DEVICE_IN_BLUETOOTH_HFP,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_MAX,                   {std::string{ "" }}},
+ };
+@@ -296,6 +298,7 @@ std::vector<std::pair<int32_t, int32_t>> ResourceManager::devicePcmId {
+     {PAL_DEVICE_OUT_ULTRASOUND,           1},
+     {PAL_DEVICE_OUT_ULTRASOUND_DEDICATED, 1},
+     {PAL_DEVICE_OUT_DUMMY,                0},
++    {PAL_DEVICE_OUT_TIANTONG,             0},
+     {PAL_DEVICE_OUT_BLUETOOTH_HFP,        0},
+     {PAL_DEVICE_OUT_MAX,                  0},
+ 
+@@ -326,6 +329,7 @@ std::vector<std::pair<int32_t, int32_t>> ResourceManager::devicePcmId {
+     {PAL_DEVICE_IN_DUMMY,                 0},
+     {PAL_DEVICE_IN_CPS2_FEEDBACK,         0},
+     {PAL_DEVICE_IN_RECORD_PROXY,          0},
++    {PAL_DEVICE_IN_TIANTONG,              0},
+     {PAL_DEVICE_IN_BLUETOOTH_HFP,         0},
+     {PAL_DEVICE_IN_MAX,                   0},
+ };
+@@ -358,6 +362,7 @@ std::vector<std::pair<int32_t, std::string>> ResourceManager::sndDeviceNameLUT {
+     {PAL_DEVICE_OUT_ULTRASOUND,           {std::string{ "" }}},
+     {PAL_DEVICE_OUT_ULTRASOUND_DEDICATED, {std::string{ "" }}},
+     {PAL_DEVICE_OUT_DUMMY,                {std::string{ "" }}},
++    {PAL_DEVICE_OUT_TIANTONG,             {std::string{ "" }}},
+     {PAL_DEVICE_OUT_BLUETOOTH_HFP,        {std::string{ "" }}},
+     {PAL_DEVICE_OUT_MAX,                  {std::string{ "" }}},
+ 
+@@ -388,6 +393,7 @@ std::vector<std::pair<int32_t, std::string>> ResourceManager::sndDeviceNameLUT {
+     {PAL_DEVICE_IN_DUMMY,                 {std::string{ "" }}},
+     {PAL_DEVICE_IN_CPS2_FEEDBACK,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_RECORD_PROXY,          {std::string{ "" }}},
++    {PAL_DEVICE_IN_TIANTONG,              {std::string{ "" }}},
+     {PAL_DEVICE_IN_BLUETOOTH_HFP,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_MAX,                   {std::string{ "" }}},
+ };
+@@ -667,6 +673,7 @@ std::vector<std::pair<int32_t, std::string>> ResourceManager::listAllBackEndIds
+     {PAL_DEVICE_OUT_ULTRASOUND,           {std::string{ "" }}},
+     {PAL_DEVICE_OUT_ULTRASOUND_DEDICATED, {std::string{ "" }}},
+     {PAL_DEVICE_OUT_DUMMY,                {std::string{ "" }}},
++    {PAL_DEVICE_OUT_TIANTONG,             {std::string{ "" }}},
+     {PAL_DEVICE_OUT_BLUETOOTH_HFP,        {std::string{ "" }}},
+     {PAL_DEVICE_OUT_MAX,                  {std::string{ "" }}},
+ 
+@@ -695,6 +702,7 @@ std::vector<std::pair<int32_t, std::string>> ResourceManager::listAllBackEndIds
+     {PAL_DEVICE_IN_BLUETOOTH_BLE,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_CPS_FEEDBACK,          {std::string{ "" }}},
+     {PAL_DEVICE_IN_DUMMY,                 {std::string{ "" }}},
++    {PAL_DEVICE_IN_TIANTONG,              {std::string{ "" }}},
+     {PAL_DEVICE_IN_BLUETOOTH_HFP,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_CPS2_FEEDBACK,         {std::string{ "" }}},
+     {PAL_DEVICE_IN_RECORD_PROXY,          {std::string{ "" }}},
+-- 
+2.55.0
+

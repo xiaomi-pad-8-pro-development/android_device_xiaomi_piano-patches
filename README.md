@@ -1,9 +1,10 @@
 # ROM patches for the Xiaomi Pad 8 Pro (piano)
 
 Optional changes to ROM source projects for the Xiaomi Pad 8 Pro: the three-dot
-desktop window caption, the stock audio init scripts, setup wizard rotation on
-tablets, and limits on the Soong bootstrap's memory and threads for
-small build machines. The Xiaomi feature changes live with Xiaomi Parts.
+desktop window caption, the stock audio init scripts, the Xiaomi additions to
+the source audio library (PAL) for the FourSemi speakers, setup wizard rotation
+on tablets, and limits on the Soong bootstrap's memory and threads for small
+build machines. The Xiaomi feature changes live with Xiaomi Parts.
 The device tree builds without them.
 
 Goes in `device/xiaomi/piano-patches`. `vendorsetup.sh` applies
