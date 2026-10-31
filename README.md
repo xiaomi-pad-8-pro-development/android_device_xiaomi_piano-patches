@@ -12,6 +12,7 @@
 | Window caption | Three-dot desktop caption |
 | Audio init | Stock audio init scripts |
 | PAL | Xiaomi additions for the FourSemi speakers, sound leak protection |
+| Display | Xiaomi panel sizes in tenths of a millimetre (tiny camera UI) |
 | Setup wizard | Rotates on tablets |
 | Soong | Memory and thread limits for small builders |
 | `launcher/` | `NexusLauncherPiano` with `vendor/gms` |

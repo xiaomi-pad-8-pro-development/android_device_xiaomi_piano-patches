@@ -1,0 +1,37 @@
+From 33ab68ce2a7442c8fcc457d385b0d1bca37fcf2b Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Sat, 31 Oct 2026 06:44:54 +0000
+Subject: [PATCH] sdm: Read panel sizes given in tenths of a millimetre
+
+Xiaomi panel trees give qcom,mdss-pan-physical-*-dimension in tenths of
+a millimetre: piano reports 2387x1632 for a 238.7x163.2 mm screen. Read
+as millimetres that is 34 dpi, and apps that size themselves from the
+physical density, like the Xiaomi camera, draw tiny. No panel is under
+100 dpi, so read such a size in tenths.
+---
+ sdm/libs/dal/hw_device_drm.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index 6353788..409a7f9 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -958,6 +958,14 @@ DisplayError HWDeviceDRM::PopulateDisplayAttributes(uint32_t index) {
+   // Driver can expose list of dynamic pixel clocks, userspace needs to support dynamic change.
+   display_attributes_[index].clock_khz = mode.clock;
+ 
++  // Xiaomi panels give their size in tenths of a millimetre. No panel is
++  // under 100 dpi, so read such a size in tenths.
++  if (INT(mm_width) > 0 && INT(mm_height) > 0 &&
++      (FLOAT(mode.hdisplay) * 25.4f) / FLOAT(mm_width) < 100.0f) {
++    mm_width = (mm_width + 5) / 10;
++    mm_height = (mm_height + 5) / 10;
++  }
++
+   // If driver doesn't return panel width/height information, default to 320 dpi
+   if (INT(mm_width) <= 0 || INT(mm_height) <= 0) {
+     mm_width  = UINT32(((FLOAT(mode.hdisplay) * 25.4f) / 320.0f) + 0.5f);
+-- 
+2.43.0
+
