@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN <alifdaniel.personalspace@gmail.com>
+Date: Sat, 31 Oct 2026 17:02:01 +0800
+Subject: [PATCH] SystemUI: Import the Compose Animatable under its own name
+
+CommonTile.kt imports both android.graphics.drawable.Animatable and
+androidx.compose.animation.core.Animatable since the ColorOS QS change,
+so Kotlin rejects both as ambiguous and SystemUI fails to build. Import
+the Compose one as ComposeAnimatable.
+---
+--- a/packages/SystemUI/src/com/android/systemui/qs/panels/ui/compose/infinitegrid/CommonTile.kt
++++ b/packages/SystemUI/src/com/android/systemui/qs/panels/ui/compose/infinitegrid/CommonTile.kt
+@@ -26,7 +26,7 @@
+ import android.util.PathParser
+ import androidx.annotation.VisibleForTesting
+ import androidx.compose.animation.animateColorAsState
+-import androidx.compose.animation.core.Animatable
++import androidx.compose.animation.core.Animatable as ComposeAnimatable
+ import androidx.compose.animation.core.CubicBezierEasing
+ import androidx.compose.animation.core.animateFloatAsState
+ import androidx.compose.animation.core.spring
+@@ -208,7 +208,7 @@
+     val glassBubbleAlpha by
+         animateToggleFloat(if (onGlass && active) 1f else 0f, colorOS, "QSTileGlassBubble")
+     // The icon pops from 0.8 to 1 when the tile toggles. A Lottie clip animates itself instead.
+-    val pop = remember { Animatable(1f) }
++    val pop = remember { ComposeAnimatable(1f) }
+     var popActive by remember { mutableStateOf(active) }
+     LaunchedEffect(active) {
+         if (!colorOS || popActive == active) return@LaunchedEffect
