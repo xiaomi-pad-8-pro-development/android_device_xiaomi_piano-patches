@@ -1,0 +1,190 @@
+From 615e8aeade2db68504fea742c46e1616921bf1cc Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Sat, 31 Oct 2026 06:21:43 +0000
+Subject: [PATCH] pal: Add the stock sound leak protection
+
+When playback moves from Bluetooth to the speaker, for example when
+headphones disconnect, the stock piano PAL mutes it for a moment so it
+does not play aloud before the app pauses. Do the same, with the stock
+props: ro.vendor.audio.sound_leak_protection_device (bit 0 A2DP and BLE,
+bit 1 SCO), _mute_ms for the first mute and _mute_extend_ms when a
+stream is still muted from an earlier switch.
+---
+ resource_manager/inc/ResourceManager.h   |   1 +
+ resource_manager/src/ResourceManager.cpp | 119 +++++++++++++++++++++++
+ 2 files changed, 120 insertions(+)
+
+diff --git a/resource_manager/inc/ResourceManager.h b/resource_manager/inc/ResourceManager.h
+index ae25365..2190f04 100644
+--- a/resource_manager/inc/ResourceManager.h
++++ b/resource_manager/inc/ResourceManager.h
+@@ -835,6 +835,7 @@ public:
+     static int init();
+     static void deinit();
+     static std::shared_ptr<ResourceManager> getInstance();
++    void leakProtectionMute(const std::vector<Stream *> &streams);
+     static int XmlParser(std::string xmlFile);
+     static void updatePcmId(int32_t deviceId, int32_t pcmId);
+     static void updateLinkName(int32_t deviceId, std::string linkName);
+diff --git a/resource_manager/src/ResourceManager.cpp b/resource_manager/src/ResourceManager.cpp
+index 9e4aa49..7b6dbea 100644
+--- a/resource_manager/src/ResourceManager.cpp
++++ b/resource_manager/src/ResourceManager.cpp
+@@ -35,6 +35,7 @@
+ #define LOG_TAG "PAL: ResourceManager"
+ #include <agm/agm_api.h>
+ #include <cutils/properties.h>
++#include <chrono>
+ #include <unistd.h>
+ #include <inttypes.h>
+ #include <dlfcn.h>
+@@ -8563,6 +8564,112 @@ void SortAndUnique(std::vector<T> &streams)
+     return;
+ }
+ 
++/*
++ * Sound leak protection, as in the stock piano PAL: when playback moves from
++ * Bluetooth to the speaker, for example when headphones disconnect, keep it
++ * muted for a moment so it does not play aloud before the app pauses.
++ * ro.vendor.audio.sound_leak_protection_device: bit 0 A2DP and BLE, bit 1 SCO.
++ */
++namespace {
++std::mutex gLeakMutex;
++std::map<Stream *, std::chrono::steady_clock::time_point> gLeakUnmuteAt;
++bool gLeakThreadRunning = false;
++
++bool isLeakSource(uint32_t devId, int32_t mask)
++{
++    switch (devId) {
++    case PAL_DEVICE_OUT_BLUETOOTH_A2DP:
++    case PAL_DEVICE_OUT_BLUETOOTH_BLE:
++        return mask & 0x1;
++    case PAL_DEVICE_OUT_BLUETOOTH_SCO:
++        return mask & 0x2;
++    default:
++        return false;
++    }
++}
++
++std::vector<Stream *> leakStreams(
++        std::vector <std::tuple<Stream *, uint32_t>> &disconnectList,
++        std::vector <std::tuple<Stream *, struct pal_device *>> &connectList)
++{
++    std::vector<Stream *> streams;
++    int32_t mask = property_get_int32("ro.vendor.audio.sound_leak_protection_device", 0);
++    pal_stream_attributes sAttr;
++
++    if (!mask)
++        return streams;
++    for (auto &c : connectList) {
++        Stream *s = std::get<0>(c);
++        struct pal_device *dev = std::get<1>(c);
++        if (!s || !dev || dev->id != PAL_DEVICE_OUT_SPEAKER)
++            continue;
++        if (s->getStreamAttributes(&sAttr) || sAttr.direction != PAL_AUDIO_OUTPUT)
++            continue;
++        for (auto &d : disconnectList) {
++            if (std::get<0>(d) == s && isLeakSource(std::get<1>(d), mask)) {
++                streams.push_back(s);
++                break;
++            }
++        }
++    }
++    return streams;
++}
++}  // namespace
++
++void ResourceManager::leakProtectionMute(const std::vector<Stream *> &streams)
++{
++    int32_t muteMs = property_get_int32("ro.vendor.audio.sound_leak_protection_mute_ms", 1000);
++    int32_t extendMs = property_get_int32("ro.vendor.audio.sound_leak_protection_mute_extend_ms", 2000);
++    auto now = std::chrono::steady_clock::now();
++    std::lock_guard<std::mutex> lock(gLeakMutex);
++
++    for (Stream *s : streams) {
++        // A stream still muted from an earlier switch waits for the longer time.
++        bool muted = gLeakUnmuteAt.count(s);
++        gLeakUnmuteAt[s] = now + std::chrono::milliseconds(muted ? extendMs : muteMs);
++        PAL_INFO(LOG_TAG, "sound leak protection: mute stream %pK for %d ms", s,
++                 muted ? extendMs : muteMs);
++    }
++    if (gLeakThreadRunning)
++        return;
++    gLeakThreadRunning = true;
++    std::thread([this]() {
++        for (;;) {
++            std::vector<Stream *> due;
++            auto next = std::chrono::steady_clock::time_point::max();
++            {
++                std::lock_guard<std::mutex> lock(gLeakMutex);
++                auto now = std::chrono::steady_clock::now();
++                for (auto it = gLeakUnmuteAt.begin(); it != gLeakUnmuteAt.end();) {
++                    if (it->second <= now) {
++                        due.push_back(it->first);
++                        it = gLeakUnmuteAt.erase(it);
++                    } else {
++                        next = std::min(next, it->second);
++                        ++it;
++                    }
++                }
++                if (due.empty() && next == std::chrono::steady_clock::time_point::max()) {
++                    gLeakThreadRunning = false;
++                    return;
++                }
++            }
++            if (!due.empty()) {
++                mActiveStreamMutex.lock();
++                for (Stream *s : due) {
++                    if (isStreamActive(s, mActiveStreams)) {
++                        PAL_INFO(LOG_TAG, "sound leak protection: unmute stream %pK", s);
++                        s->mute(false);
++                    }
++                }
++                mActiveStreamMutex.unlock();
++            }
++            if (next != std::chrono::steady_clock::time_point::max())
++                std::this_thread::sleep_until(next);
++        }
++    }).detach();
++}
++
+ int32_t ResourceManager::streamDevSwitch(std::vector <std::tuple<Stream *, uint32_t>> streamDevDisconnectList,
+                                          std::vector <std::tuple<Stream *, struct pal_device *>> streamDevConnectList)
+ {
+@@ -8573,6 +8680,7 @@ int32_t ResourceManager::streamDevSwitch(std::vector <std::tuple<Stream *, uint3
+     std::vector <std::tuple<Stream *, struct pal_device *>>::iterator sIter2;
+     std::vector <Stream*> uniqueStreamsList;
+     std::vector <struct pal_device *> uniqueDevConnectionList;
++    std::vector<Stream *> leakList;
+     pal_stream_attributes sAttr;
+ 
+     PAL_INFO(LOG_TAG, "Enter");
+@@ -8639,6 +8747,11 @@ int32_t ResourceManager::streamDevSwitch(std::vector <std::tuple<Stream *, uint3
+     }
+     isDeviceSwitch = true;
+ 
++    // Mute before the switch, so nothing plays on the speaker in between.
++    leakList = leakStreams(streamDevDisconnectList, streamDevConnectList);
++    for (Stream *s : leakList)
++        s->mute_l(true);
++
+     for (sIter = uniqueStreamsList.begin(); sIter != uniqueStreamsList.end(); sIter++) {
+         status = (*sIter)->getStreamAttributes(&sAttr);
+         Session *session = NULL;
+@@ -8682,6 +8795,12 @@ exit:
+         (*sIter)->unlockStreamMutex();
+     }
+     isDeviceSwitch = false;
++    // The new device graph may not keep the mute: set it again, then
++    // schedule the unmute.
++    for (Stream *s : leakList)
++        s->mute(true);
++    if (!leakList.empty())
++        leakProtectionMute(leakList);
+     mActiveStreamMutex.unlock();
+ exit_no_unlock:
+     PAL_INFO(LOG_TAG, "Exit status: %d", status);
+-- 
+2.43.0
+
