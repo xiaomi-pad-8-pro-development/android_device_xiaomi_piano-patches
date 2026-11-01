@@ -1,0 +1,139 @@
+From 1b54b7ad648daf59ef0ba185791572bb53e5765f Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Mon, 2 Nov 2026 03:35:48 +0800
+Subject: [PATCH] FaceUnlock: Fit enrollment to tablets
+
+The enroll and try again screens were locked to portrait, and the enroll
+preview was a fixed 240x320 box sized for the rotated preview on a
+phone. On a tablet the rotated preview comes out landscape and was
+squeezed into that box.
+
+Show these screens in landscape, following the sensor between the two
+landscape rotations, and size the preview view to the preview as shown,
+inside a 320x320 area. Keeping the opening orientation is not enough:
+Settings shows the face intro in the panel's natural portrait first.
+A 180 degree turn does not restart enrollment.
+---
+ AndroidManifest.xml                           |  4 ++--
+ res/layout/face_enroll.xml                    |  2 +-
+ .../aospa/sense/activities/EnrollActivity.kt  |  3 +++
+ .../sense/controller/FaceEnrollController.kt  |  8 ++++++++
+ src/co/aospa/sense/view/CircleSurfaceView.kt  | 20 +++++++++++++++++++
+ 5 files changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index 4bcd227..44e9ee1 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -29,14 +29,14 @@
+             android:exported="true"
+             android:excludeFromRecents="true"
+             android:launchMode="standard"
+-            android:screenOrientation="portrait"
++            android:screenOrientation="sensorLandscape"
+             android:theme="@style/SudThemeGlifV4.DayNight" />
+ 
+         <activity
+             android:name=".activities.TryAgainActivity"
+             android:excludeFromRecents="true"
+             android:launchMode="standard"
+-            android:screenOrientation="portrait"
++            android:screenOrientation="sensorLandscape"
+             android:theme="@style/SudThemeGlifV4.DayNight" />
+ 
+         <service
+diff --git a/res/layout/face_enroll.xml b/res/layout/face_enroll.xml
+index 55f7ac9..c5aeb0a 100644
+--- a/res/layout/face_enroll.xml
++++ b/res/layout/face_enroll.xml
+@@ -37,7 +37,7 @@
+ 
+                     <co.aospa.sense.view.CircleSurfaceView
+                         android:id="@+id/camera_surface"
+-                        android:layout_width="240.0dip"
++                        android:layout_width="320.0dip"
+                         android:layout_height="320.0dip"
+                         android:background="#00000000" />
+                 </LinearLayout>
+diff --git a/src/co/aospa/sense/activities/EnrollActivity.kt b/src/co/aospa/sense/activities/EnrollActivity.kt
+index 265f3f3..bc5b7a6 100644
+--- a/src/co/aospa/sense/activities/EnrollActivity.kt
++++ b/src/co/aospa/sense/activities/EnrollActivity.kt
+@@ -46,6 +46,9 @@ open class EnrollActivity : FaceBaseActivity() {
+         }
+ 
+         override fun setDetectArea(size: Camera.Size?) {}
++        override fun onPreviewSizeChanged(width: Int, height: Int) {
++            runOnUiThread { mSurfaceView?.setAspectRatio(width, height) }
++        }
+         override fun handleSaveFeatureResult(result: Int) {
+             runOnUiThread {
+                 var errorString = 0
+diff --git a/src/co/aospa/sense/controller/FaceEnrollController.kt b/src/co/aospa/sense/controller/FaceEnrollController.kt
+index 46664a2..992e8b1 100644
+--- a/src/co/aospa/sense/controller/FaceEnrollController.kt
++++ b/src/co/aospa/sense/controller/FaceEnrollController.kt
+@@ -209,6 +209,13 @@ open class FaceEnrollController private constructor(private val mContext: Contex
+                         mCameraState = CameraState.CAMERA_PREVIEW_STARTED
+                         CameraService.addCallbackBuffer(mFrame!!.array(), null)
+                         CameraService.setDisplayOrientationCallback(cameraAngle, null)
++                        // Report the preview as it is shown, after the rotation.
++                        val rotated = cameraAngle % 180 != 0
++                        val previewWidth = if (rotated) mPreviewSize!!.height else mPreviewSize!!.width
++                        val previewHeight = if (rotated) mPreviewSize!!.width else mPreviewSize!!.height
++                        for (callback in mCameraCallbacks) {
++                            callback.onPreviewSizeChanged(previewWidth, previewHeight)
++                        }
+                         CameraService.setPreviewCallback(mByteBufferListener, true, null)
+                         if (mHolder != null) {
+                             if (mSurfaceCreated) {
+@@ -290,6 +297,7 @@ open class FaceEnrollController private constructor(private val mContext: Contex
+         fun onFaceDetected()
+         fun onTimeout()
+         fun setDetectArea(size: Camera.Size?)
++        fun onPreviewSizeChanged(width: Int, height: Int) {}
+     }
+ 
+     internal object CameraStateOrdinal {
+diff --git a/src/co/aospa/sense/view/CircleSurfaceView.kt b/src/co/aospa/sense/view/CircleSurfaceView.kt
+index e041644..6790594 100644
+--- a/src/co/aospa/sense/view/CircleSurfaceView.kt
++++ b/src/co/aospa/sense/view/CircleSurfaceView.kt
+@@ -18,6 +18,7 @@ class CircleSurfaceView : SurfaceView {
+ 
+     private var mProgressAnimator: ValueAnimator? = null
+     private var mProgress = 0.0f
++    private var mAspectRatio = 0.0f
+ 
+     constructor(context: Context?) : super(context) {}
+     constructor(context: Context?, attributeSet: AttributeSet?) : super(context, attributeSet) {}
+@@ -28,6 +29,25 @@ class CircleSurfaceView : SurfaceView {
+     ) {
+     }
+ 
++    fun setAspectRatio(width: Int, height: Int) {
++        mAspectRatio = width.toFloat() / height
++        requestLayout()
++    }
++
++    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
++        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
++        if (mAspectRatio <= 0.0f) return
++        // Fit the preview inside the given bounds without stretching it.
++        var width = measuredWidth
++        var height = measuredHeight
++        if (width > height * mAspectRatio) {
++            width = (height * mAspectRatio).toInt()
++        } else {
++            height = (width / mAspectRatio).toInt()
++        }
++        setMeasuredDimension(width, height)
++    }
++
+     fun setProgress(progress: Float) {
+         if (progress in 0.0f..100.0f) {
+             if (mProgressAnimator != null) {
+-- 
+2.55.0
+
