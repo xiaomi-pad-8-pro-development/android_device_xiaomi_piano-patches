@@ -1,0 +1,128 @@
+From b83f38721317ed742d148ecc47f32cd5c7c055ad Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Mon, 2 Nov 2026 03:49:26 +0800
+Subject: [PATCH] Launcher3: Fade the taskbar gesture handle
+
+Keep the stashed taskbar handle translucent and hide it after ten
+seconds without a gesture, the way the piano Pixel Launcher build does,
+so launchers built from source get the same handle.
+---
+ .../android/launcher3/taskbar/HandleFade.java | 67 +++++++++++++++++++
+ .../launcher3/taskbar/StashedHandleView.java  | 26 +++++++
+ 2 files changed, 93 insertions(+)
+ create mode 100644 quickstep/src/com/android/launcher3/taskbar/HandleFade.java
+
+diff --git a/quickstep/src/com/android/launcher3/taskbar/HandleFade.java b/quickstep/src/com/android/launcher3/taskbar/HandleFade.java
+new file mode 100644
+index 0000000..0058dd1
+--- /dev/null
++++ b/quickstep/src/com/android/launcher3/taskbar/HandleFade.java
+@@ -0,0 +1,67 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.launcher3.taskbar;
++
++import android.animation.ObjectAnimator;
++import android.view.View;
++
++/**
++ * Keeps the taskbar gesture handle translucent and hides it after a
++ * while without gestures. StashedHandleView calls
++ * attach() from its constructor and poke() whenever the launcher moves,
++ * scales or fades the handle (a touch, swipe or app switch).
++ */
++final class HandleFade {
++    private static final float SHOWN_ALPHA = 0.5f;
++    private static final long HIDE_DELAY_MS = 10_000;
++    private static final long FADE_MS = 300;
++
++    private static final int TAG_HIDE = 0x7f5a0001;
++    private static final int TAG_ANIM = 0x7f5a0002;
++    private static final int TAG_TARGET = 0x7f5a0003;
++
++    private HandleFade() {}
++
++    static void attach(View handle) {
++        handle.setTransitionAlpha(SHOWN_ALPHA);
++        handle.setTag(TAG_TARGET, SHOWN_ALPHA);
++        scheduleHide(handle);
++    }
++
++    static void poke(View handle) {
++        if (handle.getTag(TAG_HIDE) == null) {
++            // Still inside the constructor.
++            return;
++        }
++        fadeTo(handle, SHOWN_ALPHA);
++        scheduleHide(handle);
++    }
++
++    private static void scheduleHide(View handle) {
++        Runnable hide = (Runnable) handle.getTag(TAG_HIDE);
++        if (hide == null) {
++            hide = () -> fadeTo(handle, 0f);
++            handle.setTag(TAG_HIDE, hide);
++        }
++        handle.removeCallbacks(hide);
++        handle.postDelayed(hide, HIDE_DELAY_MS);
++    }
++
++    private static void fadeTo(View handle, float alpha) {
++        Object target = handle.getTag(TAG_TARGET);
++        if (target instanceof Float && (Float) target == alpha) {
++            return;
++        }
++        handle.setTag(TAG_TARGET, alpha);
++        ObjectAnimator running = (ObjectAnimator) handle.getTag(TAG_ANIM);
++        if (running != null) {
++            running.cancel();
++        }
++        ObjectAnimator anim = ObjectAnimator.ofFloat(handle, "transitionAlpha", alpha);
++        anim.setDuration(FADE_MS);
++        handle.setTag(TAG_ANIM, anim);
++        anim.start();
++    }
++}
+diff --git a/quickstep/src/com/android/launcher3/taskbar/StashedHandleView.java b/quickstep/src/com/android/launcher3/taskbar/StashedHandleView.java
+index caf3320..2548c95 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/StashedHandleView.java
++++ b/quickstep/src/com/android/launcher3/taskbar/StashedHandleView.java
+@@ -69,6 +69,32 @@ public class StashedHandleView extends View {
+                 R.color.taskbar_stashed_handle_light_color);
+         mStashedHandleDarkColor = ContextCompat.getColor(context,
+                 R.color.taskbar_stashed_handle_dark_color);
++
++        HandleFade.attach(this);
++    }
++
++    @Override
++    public void setAlpha(float alpha) {
++        super.setAlpha(alpha);
++        HandleFade.poke(this);
++    }
++
++    @Override
++    public void setTranslationY(float translationY) {
++        super.setTranslationY(translationY);
++        HandleFade.poke(this);
++    }
++
++    @Override
++    public void setScaleX(float scaleX) {
++        super.setScaleX(scaleX);
++        HandleFade.poke(this);
++    }
++
++    @Override
++    public void setScaleY(float scaleY) {
++        super.setScaleY(scaleY);
++        HandleFade.poke(this);
+     }
+ 
+     /**
+-- 
+2.55.0
+

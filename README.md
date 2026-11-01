@@ -16,4 +16,5 @@
 | Setup wizard | Rotates on tablets |
 | Face unlock | Enrollment rotates, preview keeps its aspect ratio |
 | Soong | Memory and thread limits for small builders |
+| Launcher3 | Translucent, auto-hiding taskbar gesture handle |
 | `launcher/` | `NexusLauncherPiano` with `vendor/gms` |
