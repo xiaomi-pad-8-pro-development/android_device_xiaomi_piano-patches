@@ -10,11 +10,14 @@ not resolve to the com.android.systemui.animation.Expandable type.
  .../systemui/qs/composefragment/ColorOSQuickSettings.kt     | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)
 
+ M core/java/android/widget/OverScroller.java
+ M packages/SystemUI/src/com/android/systemui/shade/ShadeExpansionStateManager.kt
+ M services/core/java/com/android/server/input/InputManagerService.java
 diff --git a/packages/SystemUI/src/com/android/systemui/qs/composefragment/ColorOSQuickSettings.kt b/packages/SystemUI/src/com/android/systemui/qs/composefragment/ColorOSQuickSettings.kt
-index 960d3b6..55d4cfb 100644
+index ba557127d24c..3afd90188019 100644
 --- a/packages/SystemUI/src/com/android/systemui/qs/composefragment/ColorOSQuickSettings.kt
 +++ b/packages/SystemUI/src/com/android/systemui/qs/composefragment/ColorOSQuickSettings.kt
-@@ -854,8 +854,8 @@ private val ColorOSHeaderButtonSize = 44.dp
+@@ -935,8 +935,8 @@ private val ColorOSHeaderSettingsIconSize = 29.dp
   */
  @Composable
  internal fun ColorOSHeaderButtons(
@@ -25,8 +28,8 @@ index 960d3b6..55d4cfb 100644
      modifier: Modifier = Modifier,
  ) {
      val glass = colorOSGlass(blurred = LocalColorOSGlassBlur.current != null)
-@@ -896,7 +896,7 @@ private fun ColorOSHeaderButton(
-     iconRes: Int,
+@@ -984,7 +984,7 @@ private fun ColorOSHeaderButton(
+     iconSize: Dp,
      description: String,
      glass: ColorOSGlass,
 -    onClick: (Expandable) -> Unit,
