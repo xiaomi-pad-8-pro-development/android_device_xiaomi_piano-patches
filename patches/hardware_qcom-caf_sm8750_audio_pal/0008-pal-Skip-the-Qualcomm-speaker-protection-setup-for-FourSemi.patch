@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Mon, 2 Nov 2026 12:00:00 +0800
+Subject: [PATCH] pal: Skip the Qualcomm speaker protection setup for FourSemi
+
+The FourSemi speaker graph on piano has no Qualcomm speaker protection
+module. The DSP rejects the SP operation mode payload PAL sends on the
+speaker backend with -22, so every speaker stream fails to start.
+
+Skip the SP setup and the Qualcomm calibration when the amps are
+FourSemi. The feedback backend still gets its VI payload: without it
+the right speakers stay silent.
+---
+ device/src/SpeakerProtection.cpp | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/device/src/SpeakerProtection.cpp b/device/src/SpeakerProtection.cpp
+--- a/device/src/SpeakerProtection.cpp
++++ b/device/src/SpeakerProtection.cpp
+@@ -68,6 +68,7 @@
+ #include "PalAudioRoute.h"
+ #include "ResourceManager.h"
+ #include "SessionAlsaUtils.h"
++#include "FourSemiMonitor.h"
+ #include "kvh2xml.h"
+ #include <agm/agm_api.h>
+ 
+@@ -1137,6 +1138,13 @@
+     bool proceed = false;
+     int i;
+     int retryCount = 0;
++
++    /* The FourSemi amps are calibrated in the factory and their module
++     * takes no Qualcomm calibration. */
++    if (FourSemiMonitor::isFourSemiAmp()) {
++        spkrCalState = SPKR_CALIBRATED;
++        return;
++    }
+ 
+     while (!threadExit) {
+         PAL_DBG(LOG_TAG, "Inside calibration while loop");
+@@ -2080,6 +2087,12 @@
+ 
+         keyVector.clear();
+         calVector.clear();
++
++        /* The FourSemi graph has no Qualcomm SP module to configure. */
++        if (FourSemiMonitor::isFourSemiAmp()) {
++            ret = 0;
++            goto exit;
++        }
+ 
+         // Setting up SP mode
+         rm->getBackendName(mDeviceAttr.id, backEndNameRx);
+-- 
+2.55.0
