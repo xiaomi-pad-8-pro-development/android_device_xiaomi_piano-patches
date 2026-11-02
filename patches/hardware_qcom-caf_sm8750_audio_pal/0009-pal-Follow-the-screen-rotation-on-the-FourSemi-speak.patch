@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Mon, 2 Nov 2026 16:30:00 +0800
+Subject: [PATCH] pal: Follow the screen rotation on the FourSemi speaker
+
+The four channel FourSemi speaker on piano picks which speakers play
+left and right in the DSP, from the screen rotation. Stock PAL sends the
+raw rotation, 0 to 3, as tag 0x0C00003B key 0x00270000 on low latency,
+deep buffer, offload and spatial streams. Do the same instead of the
+stereo MFC swap, which only covers two channel speakers.
+---
+ resource_manager/src/ResourceManager.cpp |  5 +++-
+ session/src/Session.cpp                  | 37 ++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/resource_manager/src/ResourceManager.cpp b/resource_manager/src/ResourceManager.cpp
+index 7b6dbea..e0fcaa5 100644
+--- a/resource_manager/src/ResourceManager.cpp
++++ b/resource_manager/src/ResourceManager.cpp
+@@ -44,6 +44,7 @@
+ #include <fstream>
+ #include <sys/ioctl.h>
+ #include "ResourceManager.h"
++#include "FourSemiMonitor.h"
+ #include "Session.h"
+ #include "Device.h"
+ #include "Stream.h"
+@@ -12636,7 +12637,9 @@ int ResourceManager::handleDeviceRotationChange (pal_param_device_rotation_t
+         PAL_INFO(LOG_TAG, "Device Got %d with channel %d",deviceId,
+                                                  dattr.config.ch_info.channels);
+         if ((PAL_DEVICE_OUT_SPEAKER == deviceId) &&
+-            (2 == dattr.config.ch_info.channels)) {
++            ((2 == dattr.config.ch_info.channels) ||
++             (CHANNELS_4 == dattr.config.ch_info.channels &&
++              FourSemiMonitor::isFourSemiAmp()))) {
+ 
+             PAL_INFO(LOG_TAG, "Device is Stereo Speaker");
+             std::vector <Stream *> activeStreams;
+diff --git a/session/src/Session.cpp b/session/src/Session.cpp
+index 0ae3708..0a38d79 100644
+--- a/session/src/Session.cpp
++++ b/session/src/Session.cpp
+@@ -72,6 +72,7 @@
+ #include "SessionAgm.h"
+ #include "SessionAlsaUtils.h"
+ #include "SessionAlsaVoice.h"
++#include "FourSemiMonitor.h"
+ 
+ #include <sstream>
+ 
+@@ -701,6 +702,30 @@ int Session::resume(Stream * s __unused)
+      return 0;
+ }
+ 
++/* The FourSemi speaker on piano routes its four channels by screen rotation
++ * in the DSP: the calibration takes the rotation, 0 to 3, as this tag key. */
++#define FOURSEMI_ROTATION_TAG 0x0C00003B
++#define FOURSEMI_ROTATION_KEY 0x00270000
++
++static int setFourSemiRotation(Session *session, Stream *s, uint32_t rotation)
++{
++    /* The key vector inside the payload starts with a size_t, so offset the
++     * 12 byte payload header by 4 to keep it aligned. */
++    alignas(8) uint8_t buf[4 + sizeof(effect_pal_payload_t) +
++            sizeof(pal_key_vector_t) + sizeof(pal_key_value_pair_t)] = {};
++    effect_pal_payload_t *payload = (effect_pal_payload_t *)(buf + 4);
++    pal_key_vector_t *kv = (pal_key_vector_t *)payload->payload;
++
++    payload->isTKV = PARAM_TKV;
++    payload->tag = FOURSEMI_ROTATION_TAG;
++    payload->payloadSize = sizeof(pal_key_vector_t) + sizeof(pal_key_value_pair_t);
++    kv->num_tkvs = 1;
++    kv->kvp[0].key = FOURSEMI_ROTATION_KEY;
++    kv->kvp[0].value = rotation;
++    PAL_INFO(LOG_TAG, "FourSemi speaker rotation %d", rotation);
++    return session->setTKV(s, MODULE, payload);
++}
++
+ int Session::handleDeviceRotation(Stream *s, pal_speaker_rotation_type rotation_type,
+         int device, struct mixer *mixer, PayloadBuilder* builder,
+         std::vector<std::pair<int32_t, std::string>> rxAifBackEnds)
+@@ -733,6 +758,18 @@ int Session::handleDeviceRotation(Stream *s, pal_speaker_rotation_type rotation_
+                  return status;
+              }
+ 
++             if (PAL_DEVICE_OUT_SPEAKER == dAttr.id &&
++                     CHANNELS_4 == dAttr.config.ch_info.channels &&
++                     FourSemiMonitor::isFourSemiAmp()) {
++                 if (sAttr.type == PAL_STREAM_LOW_LATENCY ||
++                         sAttr.type == PAL_STREAM_DEEP_BUFFER ||
++                         sAttr.type == PAL_STREAM_PCM_OFFLOAD ||
++                         sAttr.type == PAL_STREAM_SPATIAL_AUDIO)
++                     status = setFourSemiRotation(this, s,
++                             ResourceManager::getInstance()->getCurrentRotationType());
++                 continue;
++             }
++
+              if ((PAL_DEVICE_OUT_SPEAKER == dAttr.id) &&
+                   (2 == dAttr.config.ch_info.channels) &&
+                   (strcmp(dAttr.custom_config.custom_key, "mspp") != 0)) {
+-- 
+2.43.0
+
