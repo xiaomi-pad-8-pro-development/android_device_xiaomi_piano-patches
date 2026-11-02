@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Mon, 2 Nov 2026 22:00:00 +0800
+Subject: [PATCH 2/2] pal: Rotate the FourSemi speaker without the mute ramp
+
+The mute, wait, swap, wait, unmute sequence around a rotation guards
+the stereo MFC swap of two channel speakers against pops. The FourSemi
+algorithm switches its channels itself, so on piano it only left a gap
+in the sound on every rotation. Send the rotation directly there.
+---
+ stream/src/StreamPCM.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/stream/src/StreamPCM.cpp b/stream/src/StreamPCM.cpp
+index 80fbad3..083ef6c 100644
+--- a/stream/src/StreamPCM.cpp
++++ b/stream/src/StreamPCM.cpp
+@@ -40,6 +40,7 @@
+ #include "SessionAlsaPcm.h"
+ #include "ResourceManager.h"
+ #include "Device.h"
++#include "FourSemiMonitor.h"
+ #include <unistd.h>
+ #include <chrono>
+ 
+@@ -1256,6 +1257,14 @@ int32_t  StreamPCM::setParameters(uint32_t param_id, void *payload)
+         }
+         case PAL_PARAM_ID_DEVICE_ROTATION:
+         {
++            /* The FourSemi speaker switches its channels inside the DSP
++             * algorithm without a pop, so skip the mute ramp around it. */
++            if (NULL != session && FourSemiMonitor::isFourSemiAmp()) {
++                status = session->setParameters(this, 0,
++                                                PAL_PARAM_ID_DEVICE_ROTATION,
++                                                payload);
++                break;
++            }
+             // Call Session for Setting the parameter.
+             if (NULL != session) {
+                 /* To avoid pop while switching channels, it is required to mute
+-- 
+2.43.0
+

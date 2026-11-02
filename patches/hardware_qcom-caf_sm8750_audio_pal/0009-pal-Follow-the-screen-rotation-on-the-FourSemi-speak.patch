@@ -2,17 +2,19 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
  <alifdaniel.personalspace@gmail.com>
 Date: Mon, 2 Nov 2026 16:30:00 +0800
-Subject: [PATCH] pal: Follow the screen rotation on the FourSemi speaker
+Subject: [PATCH 1/2] pal: Follow the screen rotation on the FourSemi speaker
 
 The four channel FourSemi speaker on piano picks which speakers play
 left and right in the DSP, from the screen rotation. Stock PAL sends the
-raw rotation, 0 to 3, as tag 0x0C00003B key 0x00270000 on low latency,
-deep buffer, offload and spatial streams. Do the same instead of the
-stereo MFC swap, which only covers two channel speakers.
+rotation, 0 to 3, as tag 0x0C00003B key 0x00270000 on low latency, deep
+buffer, offload and spatial streams. The algorithm counts from
+landscape while the display's natural orientation is portrait, so send
+the screen rotation one step back. Do this instead of the stereo MFC
+swap, which only covers two channel speakers.
 ---
- resource_manager/src/ResourceManager.cpp |  5 +++-
- session/src/Session.cpp                  | 37 ++++++++++++++++++++++++
- 2 files changed, 41 insertions(+), 1 deletion(-)
+ resource_manager/src/ResourceManager.cpp |  5 ++-
+ session/src/Session.cpp                  | 40 ++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+), 1 deletion(-)
 
 diff --git a/resource_manager/src/ResourceManager.cpp b/resource_manager/src/ResourceManager.cpp
 index 7b6dbea..e0fcaa5 100644
@@ -38,7 +40,7 @@ index 7b6dbea..e0fcaa5 100644
              PAL_INFO(LOG_TAG, "Device is Stereo Speaker");
              std::vector <Stream *> activeStreams;
 diff --git a/session/src/Session.cpp b/session/src/Session.cpp
-index 0ae3708..0a38d79 100644
+index 0ae3708..7db211b 100644
 --- a/session/src/Session.cpp
 +++ b/session/src/Session.cpp
 @@ -72,6 +72,7 @@
@@ -49,12 +51,14 @@ index 0ae3708..0a38d79 100644
  
  #include <sstream>
  
-@@ -701,6 +702,30 @@ int Session::resume(Stream * s __unused)
+@@ -701,6 +702,33 @@ int Session::resume(Stream * s __unused)
       return 0;
  }
  
 +/* The FourSemi speaker on piano routes its four channels by screen rotation
-+ * in the DSP: the calibration takes the rotation, 0 to 3, as this tag key. */
++ * in the DSP: the calibration takes the rotation, 0 to 3, as this tag key.
++ * Its rotation 0 is landscape, while the display's natural orientation is
++ * portrait, so the screen rotation is one step ahead of it. */
 +#define FOURSEMI_ROTATION_TAG 0x0C00003B
 +#define FOURSEMI_ROTATION_KEY 0x00270000
 +
@@ -72,15 +76,16 @@ index 0ae3708..0a38d79 100644
 +    payload->payloadSize = sizeof(pal_key_vector_t) + sizeof(pal_key_value_pair_t);
 +    kv->num_tkvs = 1;
 +    kv->kvp[0].key = FOURSEMI_ROTATION_KEY;
-+    kv->kvp[0].value = rotation;
-+    PAL_INFO(LOG_TAG, "FourSemi speaker rotation %d", rotation);
++    kv->kvp[0].value = (rotation + 3) % 4;
++    PAL_INFO(LOG_TAG, "FourSemi speaker rotation %d for screen rotation %d",
++            kv->kvp[0].value, rotation);
 +    return session->setTKV(s, MODULE, payload);
 +}
 +
  int Session::handleDeviceRotation(Stream *s, pal_speaker_rotation_type rotation_type,
          int device, struct mixer *mixer, PayloadBuilder* builder,
          std::vector<std::pair<int32_t, std::string>> rxAifBackEnds)
-@@ -733,6 +758,18 @@ int Session::handleDeviceRotation(Stream *s, pal_speaker_rotation_type rotation_
+@@ -733,6 +761,18 @@ int Session::handleDeviceRotation(Stream *s, pal_speaker_rotation_type rotation_
                   return status;
               }
  
