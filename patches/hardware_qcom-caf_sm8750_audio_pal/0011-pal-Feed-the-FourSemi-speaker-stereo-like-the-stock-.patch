@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Tue, 3 Nov 2026 11:15:00 +0800
+Subject: [PATCH] pal: Feed the FourSemi speaker stereo like the stock PAL
+
+With ro.vendor.audio.adsp.spatial set, the stock PAL configures the
+speaker device PP MFC and the PSPD MFC for the stream's channels at
+24 bit instead of the four channel, 32 bit speaker backend. The device
+PP then spreads that stereo over all four speakers and turns it with
+the screen rotation. Fed four channels, it left the third and fourth
+empty, so only two of the four speakers played.
+---
+ session/src/Session.cpp | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/session/src/Session.cpp b/session/src/Session.cpp
+--- a/session/src/Session.cpp
++++ b/session/src/Session.cpp
+@@ -75,6 +75,7 @@
+ #include "FourSemiMonitor.h"
+ 
+ #include <sstream>
++#include <cutils/properties.h>
+ 
+ #include "hw_intf_cmn_api.h"
+ #include <errno.h>
+@@ -933,6 +934,16 @@
+     return status;
+ }
+ 
++/* With the ADSP spatial audio of the Xiaomi speakers, the speaker device PP
++ * spreads the stream's channels over every speaker by itself, so it takes the
++ * stream's channels at 24 bit rather than the speaker backend's format. */
++static bool isAdspSpatialSupported()
++{
++    static const bool supported =
++            property_get_bool("ro.vendor.audio.adsp.spatial", false);
++    return supported;
++}
++
+ /* This is to set devicePP MFC(if exists) and PSPD MFC and stream MFC*/
+ int Session::configureMFC(const std::shared_ptr<ResourceManager>& rm, struct pal_stream_attributes &sAttr,
+             struct pal_device &dAttr, const std::vector<int> &pcmDevIds, const char* intf)
+@@ -946,6 +957,7 @@
+     PayloadBuilder* builder = new PayloadBuilder();
+     uint32_t miid = 0;
+     bool devicePPMFCSet =  true;
++    uint32_t spatialChannels = 0;
+ 
+     // clear any cached custom payload
+     freeCustomPayload();
+@@ -1000,6 +1012,26 @@
+         setSlotMask(rm, sAttr, dAttr, pcmDevIds);
+     }
+ 
++    if (isAdspSpatialSupported() && dAttr.id == PAL_DEVICE_OUT_SPEAKER &&
++            SessionAlsaUtils::getModuleInstanceId(mixer, pcmDevIds.at(0), intf,
++                                                  TAG_DEVICE_PP_MFC, &miid) == 0) {
++        mfcData.sampleRate = dAttr.config.sample_rate;
++        mfcData.bitWidth = 24;
++        mfcData.numChannel = sAttr.out_media_config.ch_info.channels > 1 ?
++                sAttr.out_media_config.ch_info.channels : 2;
++        mfcData.ch_info = nullptr;
++        builder->payloadMFCConfig((uint8_t **)&payload, &payloadSize, miid, &mfcData);
++        if (payloadSize && payload) {
++            status = updateCustomPayload(payload, payloadSize);
++            freeCustomPayload(&payload, &payloadSize);
++            if (0 != status) {
++                PAL_ERR(LOG_TAG, "updateCustomPayload Failed\n");
++                goto exit;
++            }
++            spatialChannels = mfcData.numChannel;
++        }
++    }
++
+     /* Prepare stream MFC payload */
+     if (sAttr.direction == PAL_AUDIO_INPUT) {
+         status = SessionAlsaUtils::getModuleInstanceId(mixer, pcmDevIds.at(0), intf,
+@@ -1067,6 +1099,12 @@
+             mfcData.ch_info = nullptr;
+         }
+ 
++        if (spatialChannels) {
++            mfcData.sampleRate = dAttr.config.sample_rate;
++            mfcData.bitWidth = 24;
++            mfcData.numChannel = spatialChannels;
++        }
++
+         if (dAttr.id == PAL_DEVICE_OUT_AUX_DIGITAL ||
+             dAttr.id == PAL_DEVICE_OUT_AUX_DIGITAL_1 ||
+             dAttr.id == PAL_DEVICE_OUT_HDMI)
+-- 
+2.43.0
+
