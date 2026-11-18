@@ -1,0 +1,77 @@
+From 30f877ef5abcb09c5ddea9013ee9de204d44809d Mon Sep 17 00:00:00 2001
+From: MUHAMMAD ALIF DANIEL BIN MOHD HAIRUL HEZZELIN
+ <alifdaniel.personalspace@gmail.com>
+Date: Wed, 18 Nov 2026 03:36:28 +0000
+Subject: [PATCH] Settings: Show face enrollment in landscape
+
+The front camera of the Xiaomi Pad 8 Pro sits in the middle of the top
+edge in landscape, but the panel is natively portrait. The face intro,
+education, enrolling and finish screens use nosensor or portrait, so
+they open in portrait, and FaceUnlock then starts its camera preview
+while the display is still turning to landscape and picks the wrong
+preview rotation.
+
+Show them in landscape, following the sensor between the two landscape
+rotations, like the FaceUnlock enrollment screens.
+---
+ AndroidManifest.xml | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index d0efc5b..e4be70f 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -3160,18 +3160,18 @@
+ 
+         <activity android:name=".biometrics.face.FaceEnrollParentalConsent"
+                   android:exported="false"
+-                  android:screenOrientation="portrait"/>
++                  android:screenOrientation="sensorLandscape"/>
+ 
+         <activity android:name=".biometrics.face.FaceEnrollIntroduction"
+                   android:exported="false"
+                   android:theme="@style/GlifV4Theme.DayNight"
+-                  android:screenOrientation="nosensor">
++                  android:screenOrientation="sensorLandscape">
+         </activity>
+ 
+         <activity android:name=".biometrics.face.FaceEnroll"
+                   android:exported="true"
+                   android:theme="@style/GlifV4Theme.DayNight"
+-                  android:screenOrientation="nosensor">
++                  android:screenOrientation="sensorLandscape">
+             <intent-filter>
+                 <action android:name="android.settings.FACE_ENROLL"/>
+                 <category android:name="android.intent.category.DEFAULT"/>
+@@ -3180,24 +3180,24 @@
+ 
+         <activity android:name=".biometrics.face.FaceEnrollIntroductionInternal"
+                   android:exported="false"
+-                  android:screenOrientation="nosensor"
++                  android:screenOrientation="sensorLandscape"
+                   android:theme="@style/GlifV4Theme.DayNight"
+                   android:taskAffinity="com.android.settings.root" />
+ 
+         <activity android:name=".biometrics.face.FaceEnrollEducation"
+             android:exported="false"
+             android:theme="@style/GlifV4Theme.DayNight"
+-            android:screenOrientation="nosensor"/>
++            android:screenOrientation="sensorLandscape"/>
+ 
+         <activity android:name=".biometrics.face.FaceEnrollEnrolling"
+             android:exported="false"
+             android:theme="@style/GlifV4Theme.DayNight"
+-            android:screenOrientation="portrait"/>
++            android:screenOrientation="sensorLandscape"/>
+ 
+         <activity android:name=".biometrics.face.FaceEnrollFinish"
+             android:exported="true"
+             android:theme="@style/GlifV4Theme.DayNight"
+-            android:screenOrientation="portrait"/>
++            android:screenOrientation="sensorLandscape"/>
+ 
+         <activity android:name=".biometrics.face.FaceEnrollFoldPage"
+             android:exported="false"
+-- 
+2.43.0
+
